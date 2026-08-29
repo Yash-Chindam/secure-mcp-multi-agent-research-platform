@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Governed Research</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; background: #08111f; color: #e5eefb; }
+      main { width: min(760px, calc(100% - 2rem)); margin: 4rem auto; }
+      .eyebrow { color: #6ee7b7; letter-spacing: .12em; text-transform: uppercase; }
+      h1 { font-size: clamp(2rem, 7vw, 4.4rem); line-height: .98; margin: .5rem 0 1rem; }
+      p { color: #a9b8cc; max-width: 62ch; }
+      form, article { background: #101d2f; border: 1px solid #233754; border-radius: 16px; padding: 1.25rem; }
+      label { display: block; font-weight: 650; margin-bottom: .5rem; }
+      textarea { box-sizing: border-box; width: 100%; min-height: 8rem; resize: vertical; padding: .9rem; border-radius: 10px; border: 1px solid #39506f; background: #07101e; color: inherit; }
+      button { margin-top: .8rem; border: 0; border-radius: 999px; padding: .7rem 1.2rem; background: #6ee7b7; color: #062015; font-weight: 750; cursor: pointer; }
+      #message { min-height: 1.5rem; color: #6ee7b7; }
+      #jobs { display: grid; gap: .8rem; margin-top: 1.5rem; }
+      article h2 { font-size: 1rem; margin: 0 0 .5rem; }
+      .status { color: #6ee7b7; font-size: .82rem; text-transform: uppercase; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">Evidence first</div>
+      <h1>Governed research, built to be audited.</h1>
+      <p>Create a tenant-scoped research assignment. Every later claim, tool call, approval, and artifact will remain traceable to this job.</p>
+      <form id="research-form">
+        <label for="question">Research question</label>
+        <textarea id="question" name="question" required minlength="1" maxlength="4000" placeholder="Compare two AI platforms using dated, primary-source evidence."></textarea>
+        <button type="submit">Create assignment</button>
+      </form>
+      <p id="message" role="status" aria-live="polite"></p>
+      <section id="jobs" aria-label="Research assignments"></section>
+    </main>
+    <script>
+      const headers = {"Content-Type": "application/json", "X-Tenant-ID": "demo", "X-Requester-ID": "local-user"};
+      const jobs = document.querySelector("#jobs");
+      const message = document.querySelector("#message");
+
+      async function loadJobs() {
+        const response = await fetch("/api/v1/jobs", {headers});
+        const data = await response.json();
+        jobs.replaceChildren(...data.map(job => {
+          const card = document.createElement("article");
+          const title = document.createElement("h2");
+          title.textContent = job.question;
+          const state = document.createElement("div");
+          state.className = "status";
+          state.textContent = job.status;
+          card.append(title, state);
+          return card;
+        }));
+      }
+
+      document.querySelector("#research-form").addEventListener("submit", async event => {
+        event.preventDefault();
+        message.textContent = "Creating assignment...";
+        const question = document.querySelector("#question").value;
+        const response = await fetch("/api/v1/jobs", {method: "POST", headers, body: JSON.stringify({question})});
+        if (!response.ok) {
+          message.textContent = "Could not create the assignment.";
+          return;
+        }
+        document.querySelector("#question").value = "";
+        message.textContent = "Assignment created.";
+        await loadJobs();
+      });
+
+      loadJobs();
+    </script>
+  </body>
+</html>

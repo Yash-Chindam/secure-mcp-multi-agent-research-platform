@@ -1,0 +1,29 @@
+api:
+  - changed-files:
+      - any-glob-to-any-file: src/research_platform/api/**
+domain:
+  - changed-files:
+      - any-glob-to-any-file: src/research_platform/domain/**
+ui:
+  - changed-files:
+      - any-glob-to-any-file: src/research_platform/web/**
+tests:
+  - changed-files:
+      - any-glob-to-any-file: tests/**
+ci:
+  - changed-files:
+      - any-glob-to-any-file: .github/workflows/**
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - pyproject.toml
+          - .github/dependabot.yml
+docker:
+  - changed-files:
+      - any-glob-to-any-file:
+          - Dockerfile
+          - .dockerignore
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: "**/*.md"
+
