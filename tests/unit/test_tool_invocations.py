@@ -57,12 +57,31 @@ def test_invocation_refuses_unsanitized_arguments() -> None:
         make_invocation(sanitized_arguments={"api_key": "live-secret"})
 
 
-def test_denied_invocation_cannot_report_success() -> None:
-    with pytest.raises(ValueError, match="denied invocation cannot report"):
+def test_a_policy_denial_cannot_report_any_other_outcome() -> None:
+    with pytest.raises(ValueError, match="must record a denied outcome"):
         make_invocation(
             authorization_decision=AuthorizationDecision.DENY,
             outcome=InvocationOutcome.SUCCEEDED,
         )
+
+
+def test_a_refusal_must_record_why_it_was_refused() -> None:
+    with pytest.raises(ValueError, match="must record why it was refused"):
+        make_invocation(outcome=InvocationOutcome.DENIED)
+
+
+@pytest.mark.parametrize(
+    "error_class",
+    [ErrorClass.BUDGET_EXHAUSTED, ErrorClass.UPSTREAM_UNAVAILABLE],
+)
+def test_an_authorized_call_may_still_be_refused_before_execution(
+    error_class: ErrorClass,
+) -> None:
+    """A budget or circuit refusal is not a permission denial and must not be counted as one."""
+    invocation = make_invocation(outcome=InvocationOutcome.DENIED, error_class=error_class)
+
+    assert invocation.authorization_decision is AuthorizationDecision.ALLOW
+    assert invocation.outcome is InvocationOutcome.DENIED
 
 
 def test_denied_outcome_must_record_the_policy_error_class() -> None:

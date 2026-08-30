@@ -33,6 +33,13 @@ class AuthorizationDecision(StrEnum):
 
 
 class InvocationOutcome(StrEnum):
+    """What happened to the call.
+
+    ``DENIED`` means the call was refused before anything left the platform, whether by
+    policy, by a missing approval, by the job budget or by an open circuit. ``FAILED``
+    means the call reached the server and did not succeed.
+    """
+
     PENDING = "pending"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -95,12 +102,12 @@ class ToolInvocation(BaseModel):
     @model_validator(mode="after")
     def denied_calls_cannot_report_success(self) -> ToolInvocation:
         if self.authorization_decision is AuthorizationDecision.DENY:
-            if self.outcome is InvocationOutcome.SUCCEEDED:
-                raise ValueError("a denied invocation cannot report a successful outcome")
-            if self.outcome is InvocationOutcome.DENIED and self.error_class is not (
-                ErrorClass.POLICY_DENIED
-            ):
-                raise ValueError("a denied invocation must record a policy_denied error class")
+            if self.outcome is not InvocationOutcome.DENIED:
+                raise ValueError("a policy-denied invocation must record a denied outcome")
+            if self.error_class is not ErrorClass.POLICY_DENIED:
+                raise ValueError("a policy-denied invocation must record a policy_denied error")
+        if self.outcome is InvocationOutcome.DENIED and self.error_class is ErrorClass.NONE:
+            raise ValueError("a refused invocation must record why it was refused")
         if self.outcome is InvocationOutcome.SUCCEEDED and self.error_class is not ErrorClass.NONE:
             raise ValueError("a successful invocation cannot carry an error class")
         if self.outcome is InvocationOutcome.FAILED and self.error_class is ErrorClass.NONE:
