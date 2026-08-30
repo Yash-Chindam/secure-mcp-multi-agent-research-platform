@@ -7,7 +7,12 @@ from research_platform.application.jobs import (
     JobNotFoundError,
     ResearchJobService,
 )
-from research_platform.domain.models import EvidenceRecordCreate, ResearchJobCreate
+from research_platform.domain.models import (
+    EvidenceRecordCreate,
+    JobStatus,
+    ResearchJob,
+    ResearchJobCreate,
+)
 
 
 def service() -> ResearchJobService:
@@ -38,3 +43,22 @@ def test_evidence_is_scoped_to_owning_tenant_and_job() -> None:
     assert jobs.list_evidence("tenant-a", created.id) == [evidence]
     with pytest.raises(JobNotFoundError):
         jobs.list_evidence("tenant-b", created.id)
+
+
+def test_service_lists_and_transitions_only_the_tenants_jobs() -> None:
+    jobs = service()
+    tenant_job = jobs.create("tenant-a", "requester", ResearchJobCreate(question="Question A"))
+    jobs.create("tenant-b", "requester", ResearchJobCreate(question="Question B"))
+
+    planning = jobs.transition("tenant-a", tenant_job.id, JobStatus.PLANNING)
+
+    assert planning.status is JobStatus.PLANNING
+    assert jobs.list("tenant-a") == [planning]
+
+
+def test_repository_rejects_updating_an_unknown_job() -> None:
+    repository = InMemoryJobRepository()
+    unknown = ResearchJob(tenant_id="tenant-a", requester_id="requester", question="Question")
+
+    with pytest.raises(JobNotFoundError):
+        repository.update(unknown)
