@@ -11,6 +11,9 @@ The foundation provides:
 - Evidence records with SHA-256 validation.
 - Claim schemas that require supporting evidence.
 - Tenant-isolated job and evidence services.
+- Task decomposition with dependency ordering, retry budgets and cycle rejection.
+- Tool invocation auditing with argument redaction and a retry-aware error taxonomy.
+- Reviewer approvals bound to one exact server, capability, resource and argument digest.
 - A typed FastAPI boundary for research jobs and evidence.
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
@@ -63,7 +66,13 @@ every pull request without publishing it to any registry.
 Pull requests that change files under `.github/workflows/` are merged by a maintainer, because
 the Actions token is not permitted to update workflow definitions.
 
+## Design specification coverage
+
+The information model in section 10 of the design specification is implemented in full:
+`ResearchJob`, `ResearchTask`, `EvidenceRecord`, `Finding`, `ToolInvocation` and `ApprovalRequest`.
+
 ## Next milestones
 
-1. Keycloak token verification at the API boundary.
+1. MCP capability registry and the FastMCP research servers.
 2. OPA policy enforcement for tenant and role decisions.
+3. Keycloak token verification at the API boundary.
