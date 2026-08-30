@@ -15,6 +15,7 @@ The foundation provides:
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
 - A container image build verified on every pull request.
+- Dependency, labeling, and merge automation for the repository.
 
 The identity headers in this milestone are a trusted-proxy seam for local development. They are
 not production authentication. Keycloak token verification and OPA policy enforcement remain
@@ -50,6 +51,19 @@ The image installs the package from a wheel built in a separate stage, runs as a
 `app` user, and reports health through `/health`. Continuous integration rebuilds the image on
 every pull request without publishing it to any registry.
 
+## Repository automation
+
+- Dependabot opens weekly grouped updates for pip, GitHub Actions, and the Docker base image.
+- A labeler applies area labels to every pull request from its changed paths.
+- Pull requests merge automatically once linting, typing, unit, integration, Playwright, and
+  container jobs all pass. Merge commits are used so each branch keeps its individual commits.
+  Prefix a branch with `no-automerge/` to opt out.
+- Non-major Dependabot updates merge on the same evidence.
+
+Pull requests that change files under `.github/workflows/` are merged by a maintainer, because
+the Actions token is not permitted to update workflow definitions.
+
 ## Next milestones
 
-1. Dependency, labeling, and merge automation.
+1. Keycloak token verification at the API boundary.
+2. OPA policy enforcement for tenant and role decisions.
