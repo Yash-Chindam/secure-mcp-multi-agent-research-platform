@@ -14,6 +14,7 @@ The foundation provides:
 - A typed FastAPI boundary for research jobs and evidence.
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
+- A container image build verified on every pull request.
 
 The identity headers in this milestone are a trusted-proxy seam for local development. They are
 not production authentication. Keycloak token verification and OPA policy enforcement remain
@@ -38,7 +39,17 @@ python -m venv .venv
 Open <http://127.0.0.1:8000>. API documentation is available at
 <http://127.0.0.1:8000/docs>.
 
+## Run the container
+
+```powershell
+docker build -t secure-mcp-research-platform:local .
+docker run --rm -p 8000:8000 secure-mcp-research-platform:local
+```
+
+The image installs the package from a wheel built in a separate stage, runs as an unprivileged
+`app` user, and reports health through `/health`. Continuous integration rebuilds the image on
+every pull request without publishing it to any registry.
+
 ## Next milestones
 
-1. Container build verification.
-2. Dependency, labeling, and merge automation.
+1. Dependency, labeling, and merge automation.
