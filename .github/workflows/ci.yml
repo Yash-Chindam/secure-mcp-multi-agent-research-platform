@@ -81,3 +81,23 @@ jobs:
           context: .
           push: false
           tags: secure-mcp-research-platform:ci
+
+  auto-merge:
+    name: Merge after CI
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !startsWith(github.head_ref, 'no-automerge/')
+    needs: [quality, unit, integration, e2e, container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge after all required jobs pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --merge --delete-branch "$PR_URL"
