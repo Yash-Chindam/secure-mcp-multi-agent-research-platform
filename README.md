@@ -45,14 +45,16 @@ Open <http://127.0.0.1:8000>. API documentation is available at
 
 ## Pull request automation
 
-Every non-draft PR from a branch in this repository is configured for squash auto-merge after
+Every non-draft PR from a branch in this repository is squash-merged by the final CI job after
 linting, strict typing, unit tests, integration tests, Playwright E2E, and the container build
 all pass. Prefix a branch with `no-automerge/` when a manual merge is required. Dependabot
-minor and patch updates are approved and queued for auto-merge; major updates remain manual.
+minor and patch updates are merged by a privileged follow-up only after CI succeeds; major
+updates remain manual.
 
-Repository settings must enable GitHub auto-merge and require the CI jobs on the default branch.
-The pipeline builds the deployable container but does not publish it until a registry and
-deployment environment are explicitly configured.
+GitHub Free does not provide branch protection for private repositories, so repository
+administrators must avoid direct pushes to `main`; the PR workflow itself enforces the five-job
+gate before its merge command. The pipeline builds the deployable container but does not publish
+it until a registry and deployment environment are explicitly configured.
 
 ## Next milestones
 
