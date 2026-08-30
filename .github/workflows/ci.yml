@@ -86,6 +86,7 @@ jobs:
     name: Merge after CI
     if: >-
       github.event_name == 'pull_request' &&
+      github.actor != 'dependabot[bot]' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       !startsWith(github.head_ref, 'no-automerge/')
