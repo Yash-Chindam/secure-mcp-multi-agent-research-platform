@@ -14,6 +14,7 @@ The foundation provides:
 - Task decomposition with dependency ordering, retry budgets and cycle rejection.
 - Tool invocation auditing with argument redaction and a retry-aware error taxonomy.
 - Reviewer approvals bound to one exact server, capability, resource and argument digest.
+- An MCP capability registry whose discovery reveals only what the caller may see.
 - A typed FastAPI boundary for research jobs and evidence.
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
@@ -71,8 +72,20 @@ the Actions token is not permitted to update workflow definitions.
 The information model in section 10 of the design specification is implemented in full:
 `ResearchJob`, `ResearchTask`, `EvidenceRecord`, `Finding`, `ToolInvocation` and `ApprovalRequest`.
 
+Capability discovery from section 8 is enforced by `research_platform.mcp.registry`. A capability
+is revealed only when the caller's tenant, data clearance and role all permit it, and execution is
+narrower than visibility so the planner reads tool metadata without ever running a tool. A
+capability the caller cannot see is reported as missing rather than forbidden, so probing cannot
+enumerate another tenant's tools.
+
+```powershell
+curl.exe -H "X-Tenant-ID: acme" -H "X-Requester-ID: user-1" `
+  -H "X-Clearance: internal" http://127.0.0.1:8000/api/v1/capabilities
+```
+
 ## Next milestones
 
-1. MCP capability registry and the FastMCP research servers.
-2. OPA policy enforcement for tenant and role decisions.
-3. Keycloak token verification at the API boundary.
+1. The governed invocation gateway that authorizes, limits and audits every call.
+2. The FastMCP research servers behind the registered capabilities.
+3. OPA policy enforcement for tenant and role decisions.
+4. Keycloak token verification at the API boundary.

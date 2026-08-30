@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from research_platform.api.routes import create_router
 from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
+from research_platform.mcp.catalogue import default_registry
 
 
 def create_app() -> FastAPI:
@@ -13,8 +14,10 @@ def create_app() -> FastAPI:
         version="0.1.0",
     )
     service = ResearchJobService(InMemoryJobRepository())
+    registry = default_registry()
     app.state.job_service = service
-    app.include_router(create_router(service))
+    app.state.capability_registry = registry
+    app.include_router(create_router(service, registry))
 
     @app.get("/health", tags=["operations"])
     def health() -> dict[str, str]:
