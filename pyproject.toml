@@ -20,7 +20,7 @@ dev = [
   "mypy>=1.17,<3",
   "playwright>=1.55,<2",
   "pytest>=8.4,<10",
-  "pytest-cov>=6.2,<7",
+  "pytest-cov>=6.2,<8",
   "pytest-playwright>=0.7,<1",
   "ruff>=0.12,<1",
 ]
