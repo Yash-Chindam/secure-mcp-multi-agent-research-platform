@@ -15,6 +15,7 @@ The foundation provides:
 - Tool invocation auditing with argument redaction and a retry-aware error taxonomy.
 - Reviewer approvals bound to one exact server, capability, resource and argument digest.
 - An MCP capability registry whose discovery reveals only what the caller may see.
+- A governed gateway that authorizes, meters, circuit-breaks and audits every tool call.
 - A typed FastAPI boundary for research jobs and evidence.
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
@@ -83,9 +84,25 @@ curl.exe -H "X-Tenant-ID: acme" -H "X-Requester-ID: user-1" `
   -H "X-Clearance: internal" http://127.0.0.1:8000/api/v1/capabilities
 ```
 
+### The invocation gateway
+
+Nothing reaches an MCP server except through `research_platform.mcp.gateway`. For every call it
+resolves the capability against the caller, re-evaluates policy rather than trusting the earlier
+discovery result, requires a digest-bound reviewer approval for sensitive capabilities, reserves
+the job's tool call, consults the server circuit, and only then executes. Every outcome, including
+every refusal, produces an audit record whose arguments are redacted.
+
+Results come back as `UntrustedContent`: bounded by the capability's own size limit, stripped of
+the zero-width characters used to hide text from a reviewer, and flagged when the source appears
+to be steering the agent. Flagged text is preserved rather than rewritten, so the caller decides
+whether to quarantine it instead of trusting content that merely looks clean.
+
+A budget or circuit refusal is recorded as an authorized call that was stopped, never as a
+permission denial, so the security metric in section 13 stays meaningful.
+
 ## Next milestones
 
-1. The governed invocation gateway that authorizes, limits and audits every call.
-2. The FastMCP research servers behind the registered capabilities.
-3. OPA policy enforcement for tenant and role decisions.
-4. Keycloak token verification at the API boundary.
+1. The FastMCP research servers behind the registered capabilities.
+2. OPA policy enforcement for tenant and role decisions.
+3. Keycloak token verification at the API boundary.
+4. CrewAI agents and Temporal durable execution.
