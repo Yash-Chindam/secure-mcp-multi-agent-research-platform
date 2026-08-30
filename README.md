@@ -12,7 +12,8 @@ The foundation provides:
 - Claim schemas that require supporting evidence.
 - Tenant-isolated job and evidence services.
 - A typed FastAPI boundary for research jobs and evidence.
-- Strict typing, formatting, linting, unit tests, and API integration tests.
+- A requester interface for creating and listing assignments.
+- Strict typing, unit tests, API integration tests, and Playwright browser coverage.
 
 The identity headers in this milestone are a trusted-proxy seam for local development. They are
 not production authentication. Keycloak token verification and OPA policy enforcement remain
@@ -30,9 +31,14 @@ python -m venv .venv
 .\.venv\Scripts\ruff.exe format --check .
 .\.venv\Scripts\mypy.exe
 .\.venv\Scripts\pytest.exe tests\unit tests\integration --cov
+.\.venv\Scripts\playwright.exe install chromium
+.\.venv\Scripts\pytest.exe tests\e2e -m e2e --browser chromium
 ```
+
+Open <http://127.0.0.1:8000>. API documentation is available at
+<http://127.0.0.1:8000/docs>.
 
 ## Next milestones
 
-1. A requester UI and Playwright end-to-end tests.
-2. Container build verification and repository automation.
+1. Container build verification.
+2. Dependency, labeling, and merge automation.
