@@ -93,6 +93,17 @@ class AccessClass(StrEnum):
 
 PUBLISHABLE_ACCESS_CLASSES = frozenset({AccessClass.PUBLIC, AccessClass.INTERNAL})
 
+ACCESS_CLASS_RANK: dict[AccessClass, int] = {
+    AccessClass.PUBLIC: 0,
+    AccessClass.INTERNAL: 1,
+    AccessClass.RESTRICTED: 2,
+}
+
+
+def clearance_covers(clearance: AccessClass, required: AccessClass) -> bool:
+    """Report whether a clearance is at least as permissive as the class required."""
+    return ACCESS_CLASS_RANK[clearance] >= ACCESS_CLASS_RANK[required]
+
 
 class EvidenceRecordCreate(BaseModel):
     excerpt: NonEmptyText

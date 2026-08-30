@@ -12,10 +12,23 @@ from research_platform.domain.models import (
     ResearchJob,
     ResearchJobCreate,
 )
+from research_platform.domain.tasks import AgentRole
+from research_platform.mcp.registry import Capability, CapabilityRegistry
 
 
-def create_router(service: ResearchJobService) -> APIRouter:
+def create_router(service: ResearchJobService, registry: CapabilityRegistry) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["research-jobs"])
+
+    @router.get("/capabilities", response_model=list[Capability], tags=["mcp"])
+    def discover_capabilities(
+        identity: Identity,
+        acting_agent: Annotated[AgentRole | None, Query()] = None,
+    ) -> list[Capability]:
+        """Reveal only the capabilities this identity is permitted to see."""
+        principal = identity.principal
+        if acting_agent is not None:
+            principal = principal.for_agent(acting_agent)
+        return registry.discover(principal)
 
     @router.post("/jobs", response_model=ResearchJob, status_code=status.HTTP_201_CREATED)
     def create_job(command: ResearchJobCreate, identity: Identity) -> ResearchJob:
