@@ -114,10 +114,19 @@ class _AuditContext:
         )
 
     def denied(self, reason: str, error_class: ErrorClass) -> CapabilityDenied:
+        """Refuse the call before anything leaves the platform.
+
+        Only a policy verdict is recorded as an authorization denial. A refusal for an
+        exhausted budget or an open circuit was authorized and stopped for another
+        reason, and conflating the two would corrupt the permission-denial metric.
+        """
+        policy_refused = error_class is ErrorClass.POLICY_DENIED
         return CapabilityDenied(
             reason,
             self.record(
-                decision=AuthorizationDecision.DENY,
+                decision=(
+                    AuthorizationDecision.DENY if policy_refused else AuthorizationDecision.ALLOW
+                ),
                 outcome=InvocationOutcome.DENIED,
                 error_class=error_class,
                 duration_ms=0,
