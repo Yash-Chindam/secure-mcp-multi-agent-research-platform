@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "secure-mcp-research-platform"
+version = "0.1.0"
+description = "Governed, tenant-aware multi-agent research platform"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "pydantic-settings>=2.10,<3",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "mypy>=1.17,<3",
+  "playwright>=1.55,<2",
+  "pytest>=8.4,<10",
+  "pytest-cov>=6.2,<8",
+  "pytest-playwright>=0.7,<1",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/research_platform"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "integration: tests that exercise the application boundary",
+  "e2e: browser-driven end-to-end tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["research_platform"]
+
+[tool.coverage.run]
+source = ["research_platform"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
