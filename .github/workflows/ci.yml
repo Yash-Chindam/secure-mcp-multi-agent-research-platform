@@ -38,9 +38,21 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: pytest tests/unit --cov --cov-report=term-missing --cov-report=xml
+      - run: pytest tests/unit tests/integration --cov --cov-report=term-missing --cov-report=xml
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: unit-coverage
           path: coverage.xml
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/integration -m integration
