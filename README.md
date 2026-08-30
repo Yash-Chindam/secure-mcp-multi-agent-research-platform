@@ -10,6 +10,7 @@ The foundation provides:
 - Explicit workflow state transitions that reject invalid stage skipping.
 - Evidence records with SHA-256 validation.
 - Claim schemas that require supporting evidence.
+- Tenant-isolated job and evidence services.
 - Strict typing, formatting, linting, and domain unit tests.
 
 ## Develop locally
@@ -27,7 +28,6 @@ python -m venv .venv
 
 ## Next milestones
 
-1. Tenant-isolated application services.
-2. FastAPI endpoints and integration tests.
-3. A requester UI and Playwright end-to-end tests.
-4. Container build verification and repository automation.
+1. FastAPI endpoints and integration tests.
+2. A requester UI and Playwright end-to-end tests.
+3. Container build verification and repository automation.
