@@ -19,15 +19,29 @@ The foundation provides:
 - Enforced boundaries for the web, filesystem, PostgreSQL, GitHub and sandbox services.
 - A FastMCP web research server the gateway drives over a real MCP round trip.
 - Policy-as-code authorization in Rego, layered with the registry boundary and failing closed.
+- OAuth access token verification against a Keycloak realm.
 - A typed FastAPI boundary for research jobs and evidence.
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
 - A container image build verified on every pull request.
 - Dependency, labeling, and merge automation for the repository.
 
-The identity headers in this milestone are a trusted-proxy seam for local development. They are
-not production authentication. Keycloak token verification and OPA policy enforcement remain
-future security milestones.
+## Identity
+
+Two identity sources exist and they are mutually exclusive.
+
+Set `RESEARCH_OIDC_ISSUER` and `RESEARCH_OIDC_AUDIENCE` and a verified bearer token becomes the
+only accepted identity: the development headers stop being read at all, so a configured
+deployment cannot be downgraded by sending one. Signing keys are fetched from the realm's JWKS
+endpoint, and the accepted algorithms are an asymmetric allowlist so a token cannot present a
+symmetric algorithm the verifier would then check with the realm's own public key.
+
+Leave them unset and the `X-Tenant-ID`, `X-Requester-ID`, `X-Roles` and `X-Clearance` headers are
+accepted as a local development seam. That is not production authentication, and `GET /health`
+says which source is active rather than leaving an operator to assume tokens are being checked.
+
+A realm role the platform does not recognize is dropped rather than interpreted generously, and an
+absent clearance claim defaults to the least permissive class.
 
 ## Develop locally
 
@@ -152,8 +166,7 @@ contains a calculation — Python cannot be made safe by inspection.
 
 ## Next milestones
 
-1. Keycloak token verification at the API boundary.
-2. FastMCP servers for the filesystem, PostgreSQL, GitHub and sandbox services.
-3. CrewAI agents and Temporal durable execution.
-4. OpenTelemetry tracing and the evaluation harness.
-5. The full deployment topology in section 15.
+1. FastMCP servers for the filesystem, PostgreSQL, GitHub and sandbox services.
+2. CrewAI agents and Temporal durable execution.
+3. OpenTelemetry tracing and the evaluation harness.
+4. The full deployment topology in section 15.

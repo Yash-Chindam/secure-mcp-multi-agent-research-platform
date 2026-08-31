@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_platform.auth import KeyResolver, TokenVerifier
 from research_platform.mcp.catalogue import default_registry
 from research_platform.mcp.gateway import CapabilityExecutor, CapabilityGateway
 from research_platform.mcp.opa import AllOfPolicyEngine, OpaPolicyEngine
@@ -45,6 +46,29 @@ def build_policy_stack(settings: Settings) -> PolicyStack:
         engine=AllOfPolicyEngine([registry_engine, opa]),
         externally_enforced=True,
     )
+
+
+def build_token_verifier(settings: Settings) -> TokenVerifier | None:
+    """Build the token verifier when an issuer and audience are both configured.
+
+    Both are required: verifying a signature without pinning the audience would accept a
+    token the realm issued for a different service.
+    """
+    if not settings.tokens_are_verified:
+        return None
+    assert settings.oidc_issuer is not None
+    assert settings.oidc_audience is not None
+    return TokenVerifier(
+        issuer=settings.oidc_issuer,
+        audience=settings.oidc_audience,
+        keys=KeyResolver(settings.jwks_uri),
+    )
+
+
+def describe_identity(settings: Settings) -> str:
+    if settings.tokens_are_verified:
+        return "verified OAuth access tokens"
+    return "development identity headers (no token issuer configured)"
 
 
 def build_gateway(
