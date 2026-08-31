@@ -73,12 +73,16 @@ jobs:
   policy:
     name: Policy tests
     runs-on: ubuntu-latest
-    container:
-      image: openpolicyagent/opa:1.11.0-static
+    env:
+      OPA_IMAGE: openpolicyagent/opa:1.11.0
     steps:
       - uses: actions/checkout@v7
-      - run: /opa check --strict policy
-      - run: /opa test policy --verbose
+      - name: Check the policy bundle
+        run: |
+          docker run --rm -v "$PWD/policy:/policy:ro" "$OPA_IMAGE" check --strict /policy
+      - name: Run the policy tests
+        run: |
+          docker run --rm -v "$PWD/policy:/policy:ro" "$OPA_IMAGE" test /policy --verbose
 
   container:
     name: Container build
