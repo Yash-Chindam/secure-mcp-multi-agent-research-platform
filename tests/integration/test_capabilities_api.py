@@ -121,3 +121,13 @@ def test_discovery_requires_a_tenant_header(client: TestClient) -> None:
     response = client.get("/api/v1/capabilities", headers={"X-Requester-ID": "requester-1"})
 
     assert response.status_code == 422
+
+
+@pytest.mark.integration
+def test_health_states_how_authorization_is_enforced(client: TestClient) -> None:
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "registry boundary" in body["authorization"]

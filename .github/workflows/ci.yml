@@ -70,6 +70,20 @@ jobs:
       - run: playwright install --with-deps chromium
       - run: pytest tests/e2e -m e2e --browser chromium
 
+  policy:
+    name: Policy tests
+    runs-on: ubuntu-latest
+    env:
+      OPA_IMAGE: openpolicyagent/opa:1.11.0
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the policy bundle
+        run: |
+          docker run --rm -v "$PWD/policy:/policy:ro" "$OPA_IMAGE" check --strict /policy
+      - name: Run the policy tests
+        run: |
+          docker run --rm -v "$PWD/policy:/policy:ro" "$OPA_IMAGE" test /policy --verbose
+
   container:
     name: Container build
     runs-on: ubuntu-latest
@@ -90,7 +104,7 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       !startsWith(github.head_ref, 'no-automerge/')
-    needs: [quality, unit, integration, e2e, container]
+    needs: [quality, unit, integration, e2e, policy, container]
     runs-on: ubuntu-latest
     permissions:
       contents: write
