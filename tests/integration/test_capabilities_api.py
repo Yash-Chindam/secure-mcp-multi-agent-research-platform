@@ -117,10 +117,10 @@ def test_an_unknown_acting_agent_is_rejected(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-def test_discovery_requires_a_tenant_header(client: TestClient) -> None:
+def test_discovery_requires_an_identified_tenant(client: TestClient) -> None:
     response = client.get("/api/v1/capabilities", headers={"X-Requester-ID": "requester-1"})
 
-    assert response.status_code == 422
+    assert response.status_code == 401
 
 
 @pytest.mark.integration

@@ -5,7 +5,11 @@ from fastapi.responses import HTMLResponse
 
 from research_platform.api.routes import create_router
 from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
-from research_platform.composition import build_policy_stack
+from research_platform.composition import (
+    build_policy_stack,
+    build_token_verifier,
+    describe_identity,
+)
 from research_platform.mcp.catalogue import default_registry
 from research_platform.settings import Settings, load_settings
 
@@ -24,6 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.job_service = service
     app.state.capability_registry = registry
     app.state.policy_stack = policy
+    app.state.token_verifier = build_token_verifier(resolved)
     app.include_router(create_router(service, registry))
 
     @app.get("/health", tags=["operations"])
@@ -31,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Report readiness and how authorization is being enforced."""
         return {
             "status": "ok",
+            "identity": describe_identity(resolved),
             "authorization": policy.description,
         }
 
