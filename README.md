@@ -18,6 +18,7 @@ The foundation provides:
 - A governed gateway that authorizes, meters, circuit-breaks and audits every tool call.
 - Enforced boundaries for the web, filesystem, PostgreSQL, GitHub and sandbox services.
 - A FastMCP web research server the gateway drives over a real MCP round trip.
+- Policy-as-code authorization in Rego, layered with the registry boundary and failing closed.
 - A typed FastAPI boundary for research jobs and evidence.
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
@@ -102,6 +103,36 @@ whether to quarantine it instead of trusting content that merely looks clean.
 A budget or circuit refusal is recorded as an authorized call that was stopped, never as a
 permission denial, so the security metric in section 13 stays meaningful.
 
+### Authorization
+
+Authorization is decided by two layers that must both permit a call:
+
+1. The **registry boundary** — the platform's own invariant, derived from the registered
+   capability.
+2. The **Open Policy Agent bundle** in [`policy/research/authz.rego`](./policy/research/authz.rego)
+   — the organization's policy, consulted over HTTP when `RESEARCH_OPA_URL` is set.
+
+Requiring both means a misconfigured bundle cannot widen access beyond the registered
+capability, and a capability cannot override a policy that has narrowed it. The bundle also
+carries a rule the catalogue cannot express: no agent may execute a side-effecting capability,
+whatever its `allowed_agents` list says — only a human role may cause an external side effect.
+
+The policy client fails closed. A timeout, transport error, error status or unreadable response
+all refuse the call, because an authorization service that is unreachable must never be
+equivalent to one that said yes. Argument *names* are sent to the policy; argument *values* are
+not, so asking for a decision does not copy sensitive data into a second service and its logs.
+
+`GET /health` reports which layers are active, so running without a policy service is stated
+rather than silently assumed.
+
+```powershell
+$env:RESEARCH_OPA_URL = "http://localhost:8181"
+docker run --rm -p 8181:8181 -v "${PWD}/policy:/policy" openpolicyagent/opa:1.11.0 `
+  run --server --addr :8181 /policy
+```
+
+Policy tests run in CI with `opa check --strict` and `opa test`.
+
 ### Service boundaries
 
 Each service in section 8 declares its own boundary, enforced inside the server as well as at
@@ -121,8 +152,8 @@ contains a calculation — Python cannot be made safe by inspection.
 
 ## Next milestones
 
-1. FastMCP servers for the filesystem, PostgreSQL, GitHub and sandbox services.
-2. OPA policy enforcement for tenant and role decisions.
-3. Keycloak token verification at the API boundary.
-4. CrewAI agents and Temporal durable execution.
-5. OpenTelemetry tracing and the evaluation harness.
+1. Keycloak token verification at the API boundary.
+2. FastMCP servers for the filesystem, PostgreSQL, GitHub and sandbox services.
+3. CrewAI agents and Temporal durable execution.
+4. OpenTelemetry tracing and the evaluation harness.
+5. The full deployment topology in section 15.
