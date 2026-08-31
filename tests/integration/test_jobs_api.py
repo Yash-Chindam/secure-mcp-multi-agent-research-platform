@@ -48,10 +48,11 @@ def test_cross_tenant_job_access_looks_like_not_found(client: TestClient) -> Non
 
 
 @pytest.mark.integration
-def test_request_identity_headers_are_required(client: TestClient) -> None:
+def test_an_unidentified_request_is_refused(client: TestClient) -> None:
     response = client.post("/api/v1/jobs", json={"question": "Question"})
 
-    assert response.status_code == 422
+    assert response.status_code == 401
+    assert "required" in response.json()["detail"]
 
 
 @pytest.mark.integration

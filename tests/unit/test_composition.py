@@ -2,7 +2,12 @@ from uuid import uuid4
 
 import pytest
 
-from research_platform.composition import build_gateway, build_policy_stack
+from research_platform.composition import (
+    build_gateway,
+    build_policy_stack,
+    build_token_verifier,
+    describe_identity,
+)
 from research_platform.domain.models import AccessClass, ResearchBudget
 from research_platform.domain.tasks import AgentRole
 from research_platform.identity import Principal, Role
@@ -106,3 +111,54 @@ def test_the_assembled_gateway_permits_an_authorized_call() -> None:
 
     assert "20 USD" in result.content.text
     assert len(executor.calls) == 1
+
+
+def test_tokens_are_not_verified_without_an_issuer_and_audience() -> None:
+    assert build_token_verifier(settings()) is None
+    assert build_token_verifier(settings(oidc_issuer="https://kc.test/realms/r")) is None
+    assert build_token_verifier(settings(oidc_audience="research-platform")) is None
+
+
+def test_a_configured_issuer_and_audience_build_a_verifier() -> None:
+    configured = settings(
+        oidc_issuer="https://kc.test/realms/research",
+        oidc_audience="research-platform",
+        oidc_jwks_uri="https://kc.test/keys",
+    )
+
+    assert build_token_verifier(configured) is not None
+    assert configured.tokens_are_verified is True
+
+
+def test_the_jwks_uri_follows_the_realm_convention() -> None:
+    configured = settings(
+        oidc_issuer="https://kc.test/realms/research/",
+        oidc_audience="research-platform",
+    )
+
+    assert configured.jwks_uri == ("https://kc.test/realms/research/protocol/openid-connect/certs")
+
+
+def test_an_explicit_jwks_uri_wins() -> None:
+    configured = settings(
+        oidc_issuer="https://kc.test/realms/research",
+        oidc_audience="research-platform",
+        oidc_jwks_uri="https://keys.test/jwks.json",
+    )
+
+    assert configured.jwks_uri == "https://keys.test/jwks.json"
+
+
+def test_keys_cannot_be_fetched_without_an_issuer() -> None:
+    with pytest.raises(ValueError, match="issuer must be configured"):
+        _ = settings().jwks_uri
+
+
+def test_the_identity_source_is_described() -> None:
+    assert "development identity headers" in describe_identity(settings())
+    assert "verified OAuth access tokens" in describe_identity(
+        settings(
+            oidc_issuer="https://kc.test/realms/research",
+            oidc_audience="research-platform",
+        )
+    )
