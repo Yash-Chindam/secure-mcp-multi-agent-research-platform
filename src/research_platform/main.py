@@ -5,23 +5,34 @@ from fastapi.responses import HTMLResponse
 
 from research_platform.api.routes import create_router
 from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
+from research_platform.composition import build_policy_stack
 from research_platform.mcp.catalogue import default_registry
+from research_platform.settings import Settings, load_settings
 
 
-def create_app() -> FastAPI:
+def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Secure MCP Multi-Agent Research Platform",
         version="0.1.0",
     )
+    resolved = settings or load_settings()
     service = ResearchJobService(InMemoryJobRepository())
     registry = default_registry()
+    policy = build_policy_stack(resolved)
+
+    app.state.settings = resolved
     app.state.job_service = service
     app.state.capability_registry = registry
+    app.state.policy_stack = policy
     app.include_router(create_router(service, registry))
 
     @app.get("/health", tags=["operations"])
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        """Report readiness and how authorization is being enforced."""
+        return {
+            "status": "ok",
+            "authorization": policy.description,
+        }
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index() -> str:
