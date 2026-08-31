@@ -16,6 +16,8 @@ The foundation provides:
 - Reviewer approvals bound to one exact server, capability, resource and argument digest.
 - An MCP capability registry whose discovery reveals only what the caller may see.
 - A governed gateway that authorizes, meters, circuit-breaks and audits every tool call.
+- Enforced boundaries for the web, filesystem, PostgreSQL, GitHub and sandbox services.
+- A FastMCP web research server the gateway drives over a real MCP round trip.
 - A typed FastAPI boundary for research jobs and evidence.
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
@@ -100,9 +102,27 @@ whether to quarantine it instead of trusting content that merely looks clean.
 A budget or circuit refusal is recorded as an authorized call that was stopped, never as a
 permission denial, so the security metric in section 13 stays meaningful.
 
+### Service boundaries
+
+Each service in section 8 declares its own boundary, enforced inside the server as well as at
+the gateway, so a future direct client inherits it:
+
+| Service | Boundary |
+|---|---|
+| Web research | HTTPS-only allowlisted domains, standard port, no embedded credentials; private, loopback, link-local and cloud metadata addresses refused; sliding-window rate limit per tenant and host |
+| Filesystem | Per-tenant absolute workspace root, relative paths only, readable document types, confinement re-checked after symlink resolution |
+| PostgreSQL | One SELECT or WITH statement, comments and string literals stripped before keyword checks, every table schema-qualified to the caller's own schema, row limit tightened |
+| GitHub | Per-tenant `owner/name` allowlist, ordinary branch and tag refs only |
+| Python analysis | Network refused by construction, CPU, memory, wall-clock and output ceilings, submitted code screened for withheld capabilities |
+
+The SQL parser and the sandbox code screen are defence in depth, not the guarantee. The database
+role must be read-only with row-level security, and the container isolation is what actually
+contains a calculation — Python cannot be made safe by inspection.
+
 ## Next milestones
 
-1. The FastMCP research servers behind the registered capabilities.
+1. FastMCP servers for the filesystem, PostgreSQL, GitHub and sandbox services.
 2. OPA policy enforcement for tenant and role decisions.
 3. Keycloak token verification at the API boundary.
 4. CrewAI agents and Temporal durable execution.
+5. OpenTelemetry tracing and the evaluation harness.
