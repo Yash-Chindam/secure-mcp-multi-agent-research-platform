@@ -35,12 +35,10 @@ def test_service_describes_only_the_tenants_schema() -> None:
 def test_service_parses_and_bounds_a_query_before_execution() -> None:
     postgres, backend = service()
 
-    assert postgres.run_analytical_query(
-        "acme", "SELECT amount FROM tenant_acme.invoices"
-    ) == [{"total": 42}]
-    assert backend.queries == [
-        ("SELECT amount FROM tenant_acme.invoices LIMIT 25", "tenant_acme")
+    assert postgres.run_analytical_query("acme", "SELECT amount FROM tenant_acme.invoices") == [
+        {"total": 42}
     ]
+    assert backend.queries == [("SELECT amount FROM tenant_acme.invoices LIMIT 25", "tenant_acme")]
 
 
 def test_service_refuses_an_unknown_tenant() -> None:
