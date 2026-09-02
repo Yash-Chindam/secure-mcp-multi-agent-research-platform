@@ -47,4 +47,3 @@ def test_service_requires_a_tenant(service: FilesystemService) -> None:
 def test_document_limit_must_be_positive(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="must be positive"):
         FilesystemService(WorkspaceRoots({"acme": tmp_path}), max_document_bytes=0)
-
