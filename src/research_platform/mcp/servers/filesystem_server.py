@@ -76,4 +76,3 @@ def build_filesystem_server(service: FilesystemService) -> FastMCP:
             raise ValueError(f"validation error: {error}") from error
 
     return server
-
