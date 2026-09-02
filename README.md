@@ -17,7 +17,7 @@ The foundation provides:
 - An MCP capability registry whose discovery reveals only what the caller may see.
 - A governed gateway that authorizes, meters, circuit-breaks and audits every tool call.
 - Enforced boundaries for the web, filesystem, PostgreSQL, GitHub and sandbox services.
-- A FastMCP web research server the gateway drives over a real MCP round trip.
+- All five FastMCP research servers, driven by the gateway over real MCP round trips.
 - Policy-as-code authorization in Rego, layered with the registry boundary and failing closed.
 - OAuth access token verification against a Keycloak realm.
 - A typed FastAPI boundary for research jobs and evidence.
@@ -164,9 +164,16 @@ The SQL parser and the sandbox code screen are defence in depth, not the guarant
 role must be read-only with row-level security, and the container isolation is what actually
 contains a calculation — Python cannot be made safe by inspection.
 
+All five servers are built by `research_platform.mcp.servers.deployment.build_servers`, which
+registers a service only when the deployment supplied both a backend and its boundary. An
+unconfigured service is left absent, so a call to it fails as an unreachable server and opens its
+circuit rather than being mounted against a placeholder that returns nothing an agent would treat
+as an answer. The analysis server likewise refuses to run anything when no isolated runtime is
+configured.
+
 ## Next milestones
 
-1. FastMCP servers for the filesystem, PostgreSQL, GitHub and sandbox services.
-2. CrewAI agents and Temporal durable execution.
+1. CrewAI agents for the planner, researcher, analyst, critic and reporter roles.
+2. Temporal durable execution with human approval signals.
 3. OpenTelemetry tracing and the evaluation harness.
 4. The full deployment topology in section 15.
