@@ -11,6 +11,7 @@ without assembling a CrewAI ``Task``/``Crew`` around it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from crewai import Agent
 from crewai.lite_agent_output import LiteAgentOutput
@@ -27,6 +28,16 @@ from research_platform.agents.contracts import (
 )
 from research_platform.agents.validation import DEFAULT_MAX_ATTEMPTS, BoundedSchemaCorrection
 from research_platform.domain.tasks import AgentRole
+
+
+class KickoffAgent(Protocol):
+    """The one thing ``request_agent_output`` needs from an agent.
+
+    A real ``crewai.Agent`` satisfies this structurally, and so does a fake built for a
+    test - neither needs a live LLM to exercise the bounded-correction loop around it.
+    """
+
+    def kickoff(self, message: str) -> LiteAgentOutput | object: ...
 
 
 @dataclass(frozen=True)
@@ -124,7 +135,7 @@ def build_agent(
 
 
 def request_agent_output(
-    agent: Agent,
+    agent: KickoffAgent,
     role: AgentRole,
     *,
     instructions: str,
