@@ -29,14 +29,18 @@ from research_platform.agents.contracts import (
     PlannedTask,
     ResearchPlan,
     ResearchReport,
+    unsupported_citations,
 )
 from research_platform.domain.models import (
     EvidenceRecord,
     EvidenceRecordCreate,
     JobStatus,
     ResearchJob,
+    utc_now,
 )
 from research_platform.domain.tasks import AgentRole, ResearchTask
+from research_platform.observability.metrics import PlatformMetrics, get_metrics
+from research_platform.observability.tracing import get_tracer
 
 
 class JobsPort(Protocol):
@@ -117,9 +121,32 @@ async def run_research_job(
     *,
     jobs: JobsPort,
     activities: OrchestrationActivities,
+    metrics: PlatformMetrics | None = None,
 ) -> ResearchOutcome:
     """Drive one research job through the section 9 pipeline to a terminal status."""
+    metrics = metrics or get_metrics()
+    tracer = get_tracer()
+    with tracer.start_as_current_span("research.job") as span:
+        span.set_attribute("job.id", str(job.id))
+        span.set_attribute("tenant.id", job.tenant_id)
+        metrics.active_jobs.add(1, {"tenant.id": job.tenant_id})
+        try:
+            return await _run_research_job(job, jobs=jobs, activities=activities, metrics=metrics)
+        finally:
+            metrics.active_jobs.add(-1, {"tenant.id": job.tenant_id})
+
+
+async def _run_research_job(
+    job: ResearchJob,
+    *,
+    jobs: JobsPort,
+    activities: OrchestrationActivities,
+    metrics: PlatformMetrics,
+) -> ResearchOutcome:
     job = await jobs.transition(job.tenant_id, job.id, JobStatus.PLANNING)
+    metrics.job_queue_age.record(
+        (utc_now() - job.created_at).total_seconds(), {"tenant.id": job.tenant_id}
+    )
     plan = await activities.plan(job)
 
     job = await jobs.transition(job.tenant_id, job.id, JobStatus.RESEARCHING)
@@ -129,7 +156,7 @@ async def run_research_job(
         if planned.assigned_agent is AgentRole.RESEARCHER
     ]
     evidence, unmet = await _collect_evidence(
-        job, researcher_tasks, jobs=jobs, activities=activities
+        job, researcher_tasks, jobs=jobs, activities=activities, metrics=metrics
     )
 
     if not evidence:
@@ -147,7 +174,11 @@ async def run_research_job(
             break
 
         job = await jobs.transition(job.tenant_id, job.id, JobStatus.REVIEW_REQUIRED)
+        review_started = utc_now()
         decision = await activities.await_reviewer_decision(job, critique)
+        metrics.approval_wait_time.record(
+            (utc_now() - review_started).total_seconds(), {"tenant.id": job.tenant_id}
+        )
 
         if decision is ReviewerDecision.APPROVE:
             break
@@ -162,12 +193,17 @@ async def run_research_job(
             return ResearchOutcome(job=job, report=None, evidence=evidence)
 
         more_evidence, unmet = await _collect_evidence(
-            job, researcher_tasks, jobs=jobs, activities=activities
+            job, researcher_tasks, jobs=jobs, activities=activities, metrics=metrics
         )
         evidence = evidence + more_evidence
 
     job = await jobs.transition(job.tenant_id, job.id, JobStatus.REPORTING)
     report = await activities.report(job, critique, evidence)
+    missing_citations = unsupported_citations(
+        report, available_evidence_ids=frozenset(record.id for record in evidence)
+    )
+    if missing_citations:
+        metrics.unsupported_citations.add(len(missing_citations), {"tenant.id": job.tenant_id})
 
     final_status = JobStatus.PARTIAL if (report.is_partial or unmet) else JobStatus.COMPLETED
     job = await jobs.transition(job.tenant_id, job.id, final_status)
@@ -180,6 +216,7 @@ async def _collect_evidence(
     *,
     jobs: JobsPort,
     activities: OrchestrationActivities,
+    metrics: PlatformMetrics,
 ) -> tuple[list[EvidenceRecord], list[str]]:
     """Run every researcher task in parallel and persist what each one found.
 
@@ -199,10 +236,13 @@ async def _collect_evidence(
     records: list[EvidenceRecord] = []
     unmet: list[str] = []
     for task, result in zip(tasks, results, strict=True):
+        attributes = {"tenant.id": job.tenant_id, "agent_role": task.assigned_agent.value}
         if isinstance(result, BaseException):
             unmet.extend(task.evidence_requirements or [task.objective])
+            metrics.task_completions.add(1, attributes | {"outcome": "failed"})
             continue
         for record in result.records:
             records.append(await jobs.add_evidence(job.tenant_id, job.id, record))
         unmet.extend(result.unmet_requirements)
+        metrics.task_completions.add(1, attributes | {"outcome": "succeeded"})
     return records, unmet

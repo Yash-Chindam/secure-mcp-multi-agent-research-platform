@@ -11,6 +11,8 @@ from research_platform.composition import (
     describe_identity,
 )
 from research_platform.mcp.catalogue import default_registry
+from research_platform.observability.metrics import configure_metrics
+from research_platform.observability.tracing import configure_tracing
 from research_platform.settings import Settings, load_settings
 
 
@@ -23,6 +25,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     service = ResearchJobService(InMemoryJobRepository())
     registry = default_registry()
     policy = build_policy_stack(resolved)
+    tracing = configure_tracing(resolved)
+    metrics = configure_metrics(resolved)
 
     app.state.settings = resolved
     app.state.job_service = service
@@ -33,11 +37,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health", tags=["operations"])
     def health() -> dict[str, str]:
-        """Report readiness and how authorization is being enforced."""
+        """Report readiness and how authorization and observability are configured."""
         return {
             "status": "ok",
             "identity": describe_identity(resolved),
             "authorization": policy.description,
+            "tracing": tracing.description,
+            "metrics": metrics.description,
         }
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
