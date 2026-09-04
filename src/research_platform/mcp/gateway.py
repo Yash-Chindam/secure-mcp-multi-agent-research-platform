@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from opentelemetry.trace import Span, Status, StatusCode, Tracer
 from pydantic import BaseModel
 
 from research_platform.domain.approvals import ApprovalMismatch, ApprovalRequest
@@ -24,6 +25,8 @@ from research_platform.mcp.breaker import BudgetExhausted, BudgetLedger, Circuit
 from research_platform.mcp.policy import AuthorizationRequest, PolicyEngine, RegistryPolicyEngine
 from research_platform.mcp.registry import Capability, CapabilityRegistry
 from research_platform.mcp.sanitizer import UntrustedContent, sanitize_result
+from research_platform.observability.metrics import PlatformMetrics, get_metrics
+from research_platform.observability.tracing import get_tracer
 
 
 class CapabilityDenied(PermissionError):
@@ -160,12 +163,16 @@ class CapabilityGateway:
         policy: PolicyEngine | None = None,
         budgets: BudgetLedger | None = None,
         breaker: CircuitBreaker | None = None,
+        tracer: Tracer | None = None,
+        metrics: PlatformMetrics | None = None,
     ) -> None:
         self._registry = registry
         self._executor = executor
         self._policy = policy or RegistryPolicyEngine()
         self._budgets = budgets or BudgetLedger()
         self._breaker = breaker or CircuitBreaker()
+        self._tracer = tracer or get_tracer()
+        self._metrics = metrics or get_metrics()
 
     @property
     def budgets(self) -> BudgetLedger:
@@ -187,7 +194,76 @@ class CapabilityGateway:
         budget: ResearchBudget,
         approval: ApprovalRequest | None = None,
     ) -> InvocationResult:
-        """Run one capability, or refuse it before anything leaves the platform."""
+        """Run one capability, or refuse it before anything leaves the platform.
+
+        The whole call - authorization, budget, execution - runs inside one span, and
+        every outcome (allowed, denied, failed) is observed the same way regardless of
+        where in the method it happened, so section 13's MCP latency, error rate and
+        permission-denial metrics stay accurate without an instrumentation call at every
+        return and raise site below.
+        """
+        with self._tracer.start_as_current_span("mcp.invocation") as span:
+            span.set_attribute("mcp.server", server)
+            span.set_attribute("mcp.capability", capability_name)
+            span.set_attribute("tenant.id", principal.tenant_id)
+            span.set_attribute("job.id", str(job_id))
+            span.set_attribute("task.id", str(task_id))
+            try:
+                result = self._invoke(
+                    principal=principal,
+                    job_id=job_id,
+                    task_id=task_id,
+                    server=server,
+                    capability_name=capability_name,
+                    arguments=arguments,
+                    budget=budget,
+                    approval=approval,
+                )
+            except (CapabilityDenied, CapabilityFailed) as error:
+                self._observe(error.invocation, span)
+                raise
+            self._observe(result.invocation, span)
+            if result.is_suspicious:
+                for flag in result.content.injection_flags:
+                    self._metrics.injection_flags.add(
+                        1,
+                        {
+                            "mcp.server": server,
+                            "mcp.capability": capability_name,
+                            "flag": flag.value,
+                        },
+                    )
+                span.set_attribute("mcp.suspicious", True)
+            return result
+
+    def _observe(self, invocation: ToolInvocation, span: Span) -> None:
+        attributes = {
+            "mcp.server": invocation.mcp_server,
+            "mcp.capability": invocation.capability,
+            "outcome": invocation.outcome.value,
+            "error_class": invocation.error_class.value,
+        }
+        span.set_attribute("mcp.outcome", invocation.outcome.value)
+        span.set_attribute("mcp.error_class", invocation.error_class.value)
+        if invocation.outcome is not InvocationOutcome.SUCCEEDED:
+            span.set_status(Status(StatusCode.ERROR, invocation.error_class.value))
+        self._metrics.mcp_calls.add(1, attributes)
+        self._metrics.mcp_call_duration.record(invocation.duration_ms or 0, attributes)
+        if invocation.outcome is InvocationOutcome.DENIED:
+            self._metrics.permission_denials.add(1, attributes)
+
+    def _invoke(
+        self,
+        *,
+        principal: Principal,
+        job_id: UUID,
+        task_id: UUID,
+        server: str,
+        capability_name: str,
+        arguments: dict[str, Any],
+        budget: ResearchBudget,
+        approval: ApprovalRequest | None,
+    ) -> InvocationResult:
         capability = self._registry.resolve_for(principal, server, capability_name)
         audit = _AuditContext(
             job_id=job_id,
