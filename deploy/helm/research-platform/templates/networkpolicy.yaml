@@ -1,0 +1,104 @@
+{{/*
+Section 15: "NetworkPolicies separating application, MCP, data and observability
+planes." Every pod this chart creates carries a `plane` label (application | mcp | data
+| observability); the policies below default-deny ingress within the namespace and then
+allow only the traffic the platform's own wiring needs between those planes. A pod from
+an upstream dependency (postgresql, temporal, kube-prometheus-stack, ...) is only
+covered once it carries the matching `plane` label - see values.yaml's commonLabels/
+podLabels overrides for each dependency, which must be checked against the exact chart
+version in use since the key for injecting a pod label is not standardized across
+charts.
+*/}}
+{{- if .Values.networkPolicies.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "research-platform.fullname" . }}-default-deny
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "research-platform.fullname" . }}-application-ingress
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { plane: application }
+  policyTypes: [Ingress]
+  ingress:
+    # The cluster's ingress controller reaches the api; anything already inside the
+    # application plane (api <-> worker <-> opa) may also reach it.
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - port: http
+    - from:
+        - podSelector:
+            matchLabels: { plane: application }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "research-platform.fullname" . }}-mcp-ingress
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { plane: mcp }
+  policyTypes: [Ingress]
+  ingress:
+    # Only the application plane (the worker's agents, discovering and calling
+    # capabilities through the governed gateway) may reach an MCP server.
+    - from:
+        - podSelector:
+            matchLabels: { plane: application }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "research-platform.fullname" . }}-data-ingress
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { plane: data }
+  policyTypes: [Ingress]
+  ingress:
+    # PostgreSQL, Redis, MinIO and Temporal's own store are reached by the application
+    # and mcp planes (a research task reading through the postgres MCP server, the
+    # worker persisting job state, Temporal's own frontend talking to its database) -
+    # never directly by anything outside the cluster's own workloads.
+    - from:
+        - podSelector:
+            matchLabels: { plane: application }
+        - podSelector:
+            matchLabels: { plane: mcp }
+        - podSelector:
+            matchLabels: { plane: data }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "research-platform.fullname" . }}-observability-ingress
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { plane: observability }
+  policyTypes: [Ingress]
+  ingress:
+    # The OTel Collector receives traces/metrics from application and mcp workloads;
+    # Grafana, in turn, queries Prometheus/Loki/Tempo from within the same plane.
+    - from:
+        - podSelector:
+            matchLabels: { plane: application }
+        - podSelector:
+            matchLabels: { plane: mcp }
+        - podSelector:
+            matchLabels: { plane: observability }
+{{- end }}

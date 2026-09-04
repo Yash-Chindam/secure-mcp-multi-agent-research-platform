@@ -1,0 +1,64 @@
+{{/*
+Independently scalable MCP servers (section 15). Empty by default: every section 8
+server runs in-process inside api/worker today rather than as its own deployment (see
+worker.py's docstring) - this template exists so listing a server under
+`mcpServers` in values.yaml is enough to give it its own scalable Deployment once a
+server is split out to run standalone over Streamable HTTP.
+*/}}
+{{- range .Values.mcpServers }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "research-platform.fullname" $ }}-mcp-{{ .name }}
+  labels:
+    {{- include "research-platform.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: mcp-{{ .name }}
+    plane: mcp
+spec:
+  replicas: {{ .replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "research-platform.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: mcp-{{ .name }}
+  template:
+    metadata:
+      labels:
+        {{- include "research-platform.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: mcp-{{ .name }}
+        plane: mcp
+    spec:
+      serviceAccountName: {{ include "research-platform.fullname" $ }}
+      containers:
+        - name: mcp-{{ .name }}
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: ["python", "-m", "research_platform.mcp.servers.{{ .name | replace "-" "_" }}", "--http"]
+          ports:
+            - name: http
+              containerPort: {{ .port | default 8000 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "research-platform.fullname" $ }}-settings
+          {{- if .resources }}
+          resources:
+            {{- toYaml .resources | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "research-platform.fullname" $ }}-mcp-{{ .name }}
+  labels:
+    {{- include "research-platform.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: mcp-{{ .name }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .port | default 8000 }}
+      targetPort: http
+  selector:
+    {{- include "research-platform.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: mcp-{{ .name }}
+---
+{{- end }}

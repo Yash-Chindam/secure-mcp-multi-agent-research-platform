@@ -1,0 +1,60 @@
+apiVersion: v2
+name: research-platform
+description: Secure MCP Multi-Agent Research Platform - section 15 deployment topology
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+# Data and observability planes are composed from maintained upstream charts rather than
+# reimplemented here - see section 6's technology selection. Each is optional
+# (condition:) so an environment that already runs shared Postgres/Redis/observability
+# infrastructure can disable the bundled copy and point values.yaml at the shared one
+# instead. Run `helm dependency update` before installing; verify these repository URLs
+# still resolve for the provider you deploy against, since chart index locations do
+# change over time.
+dependencies:
+  - name: postgresql
+    version: ">=15.0.0 <16.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  # Temporal's own persistence store (the "temporal"/"temporal_visibility" databases) is
+  # kept separate from the platform's own PostgreSQL above - the temporal chart does not
+  # bundle a SQL store of its own (only Cassandra), so this is what server.config.persistence
+  # in values.yaml points at.
+  - name: postgresql
+    alias: temporal-postgresql
+    version: ">=15.0.0 <16.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: temporal-postgresql.enabled
+  - name: redis
+    version: ">=19.0.0 <21.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  - name: minio
+    version: ">=14.0.0 <15.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: minio.enabled
+  - name: keycloak
+    version: ">=22.0.0 <23.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: keycloak.enabled
+  - name: temporal
+    version: ">=0.55.0 <1.0.0"
+    repository: https://temporalio.github.io/helm-charts
+    condition: temporal.enabled
+  - name: opentelemetry-collector
+    version: ">=0.100.0 <1.0.0"
+    repository: https://open-telemetry.github.io/opentelemetry-helm-charts
+    condition: opentelemetry-collector.enabled
+  - name: kube-prometheus-stack
+    version: ">=65.0.0 <70.0.0"
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: kube-prometheus-stack.enabled
+  - name: loki
+    version: ">=6.0.0 <7.0.0"
+    repository: https://grafana.github.io/helm-charts
+    condition: loki.enabled
+  - name: tempo
+    version: ">=1.10.0 <2.0.0"
+    repository: https://grafana.github.io/helm-charts
+    condition: tempo.enabled

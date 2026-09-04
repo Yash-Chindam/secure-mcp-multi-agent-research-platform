@@ -96,6 +96,22 @@ jobs:
           push: false
           tags: secure-mcp-research-platform:ci
 
+  deploy:
+    name: Deployment topology
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: Validate the Helm chart
+        run: |
+          helm dependency update deploy/helm/research-platform
+          helm lint deploy/helm/research-platform
+          helm template deploy/helm/research-platform --set-file opa.policyRego=policy/research/authz.rego > /dev/null
+
   auto-merge:
     name: Merge after CI
     if: >-
@@ -104,7 +120,7 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       !startsWith(github.head_ref, 'no-automerge/')
-    needs: [quality, unit, integration, e2e, policy, container]
+    needs: [quality, unit, integration, e2e, policy, container, deploy]
     runs-on: ubuntu-latest
     permissions:
       contents: write
