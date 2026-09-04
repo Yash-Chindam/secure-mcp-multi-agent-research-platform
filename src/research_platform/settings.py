@@ -45,6 +45,11 @@ class Settings(BaseSettings):
         description="Comma-separated domains the web research server may fetch.",
     )
     web_requests_per_minute: int = Field(default=30, ge=1, le=10_000)
+    otel_exporter_otlp_endpoint: str | None = Field(
+        default=None,
+        description="Where to export traces and metrics; unset records them without "
+        "sending them anywhere.",
+    )
 
     @property
     def tokens_are_verified(self) -> bool:
