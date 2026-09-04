@@ -1,0 +1,22 @@
+{{ .Chart.Name }} {{ .Chart.AppVersion }} deployed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+  api:    {{ .Values.api.replicaCount }} replica(s), port {{ .Values.api.service.port }}
+  worker: {{ .Values.worker.replicaCount }} replica(s)
+
+Port-forward the API:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "research-platform.fullname" . }}-api {{ .Values.api.service.port }}:{{ .Values.api.service.port }}
+
+{{- if not .Values.opa.policyRego }}
+
+WARNING: opa.policyRego is empty. Set it from the repository's policy bundle before
+relying on OPA for authorization:
+  helm upgrade {{ .Release.Name }} . --reuse-values --set-file opa.policyRego=policy/research/authz.rego
+{{- end }}
+
+{{- if not .Values.settings.oidcIssuer }}
+
+The platform is running on development identity headers (no RESEARCH_OIDC_ISSUER
+configured) - section 11 expects short-lived OAuth tokens in any environment reachable
+by anyone other than trusted operators. Set settings.oidcIssuer/oidcAudience before
+this is anything but a local or CI deployment.
+{{- end }}

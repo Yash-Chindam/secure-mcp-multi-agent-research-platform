@@ -1,0 +1,236 @@
+# Default values for research-platform.
+
+image:
+  repository: secure-mcp-research-platform
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+settings:
+  # Every RESEARCH_* env var research_platform.settings.Settings reads. Values here are
+  # plain configuration; anything secret (tokens, credentials) belongs in
+  # existingSecretName below instead, never inlined here.
+  oidcIssuer: ""
+  oidcAudience: ""
+  opaUrl: "http://{{ .Release.Name }}-opa:8181"
+  temporalTargetHost: "{{ .Release.Name }}-temporal-frontend:7233"
+  temporalNamespace: "default"
+  webAllowedDomains: ""
+  otelExporterOtlpEndpoint: "http://{{ .Release.Name }}-opentelemetry-collector:4318"
+
+# Name of a pre-created Secret holding any RESEARCH_*-prefixed secret values (none are
+# required by default: the platform runs on dev identity headers and no external policy
+# service until oidcIssuer/opaUrl are set). Leave blank to mount no secret.
+existingSecretName: ""
+
+api:
+  replicaCount: 2
+  service:
+    port: 8000
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+
+worker:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 1000m, memory: 1Gi }
+
+# The MCP plane. Every section 8 server runs in-process inside api/worker today (see
+# worker.py's docstring) rather than as its own deployment, so this list is empty by
+# default; the networkPolicies.mcp policy below still exists so a server given a
+# `plane: mcp` label later is already governed by it.
+mcpServers: []
+# - name: web-research
+#   port: 8000
+#   resources:
+#     requests: { cpu: 100m, memory: 128Mi }
+#     limits: { cpu: 250m, memory: 256Mi }
+
+# NetworkPolicies separating the application, mcp, data and observability planes
+# (section 15). Every pod this chart creates carries a `plane` label; these policies
+# default-deny ingress within the namespace and then allow only the traffic the
+# platform's own wiring actually needs. A cluster that already enforces network policy
+# at a different layer (a service mesh, a CNI-level default) can disable this and rely
+# on that instead.
+networkPolicies:
+  enabled: true
+
+opa:
+  enabled: true
+  image:
+    repository: openpolicyagent/opa
+    tag: "1.11.0"
+  # The policy bundle (policy/research/*.rego in the repository) as a ConfigMap;
+  # populate via `--set-file` or a values override, e.g.:
+  #   helm install ... --set-file opa.policyRego=policy/research/authz.rego
+  policyRego: ""
+
+# Each dependency below is given a `plane` pod label so networkpolicy.yaml's
+# data/observability policies actually select its pods. The key each chart reads a pod
+# label override from is not standardized - `commonLabels` is the most common bitnami
+# convention, but verify it against the exact chart version `helm dependency update`
+# resolves before relying on it in a real cluster.
+
+postgresql:
+  enabled: true
+  auth:
+    database: research_platform
+    username: research
+  commonLabels:
+    plane: data
+
+# Temporal's own persistence store - separate database, separate credentials, separate
+# instance from the platform's own PostgreSQL above. fullnameOverride is set so
+# temporal.server.config.persistence below can reference a fixed hostname regardless of
+# release name: values.yaml is not template-rendered, so it cannot itself compute
+# "<release>-temporal-postgresql".
+temporal-postgresql:
+  enabled: true
+  fullnameOverride: temporal-postgresql
+  auth:
+    database: temporal
+    username: temporal
+    password: temporal
+  commonLabels:
+    plane: data
+
+redis:
+  enabled: true
+  commonLabels:
+    plane: data
+
+minio:
+  enabled: true
+  commonLabels:
+    plane: data
+
+keycloak:
+  enabled: true
+  commonLabels:
+    plane: application
+
+temporal:
+  enabled: true
+  cassandra:
+    enabled: false
+  # The upstream chart bundles no SQL store of its own (see temporal-postgresql above);
+  # both stores point at one shared "temporal" database for simplicity in this
+  # dev-oriented default rather than the separate default/visibility databases a tuned
+  # production deployment would use.
+  server:
+    replicaCount: 1
+    podLabels:
+      plane: application
+    config:
+      persistence:
+        defaultStore: default
+        default:
+          driver: sql
+          sql:
+            driver: postgres12
+            host: temporal-postgresql
+            port: 5432
+            database: temporal
+            user: temporal
+            password: temporal
+        visibility:
+          driver: sql
+          sql:
+            driver: postgres12
+            host: temporal-postgresql
+            port: 5432
+            database: temporal
+            user: temporal
+            password: temporal
+
+opentelemetry-collector:
+  enabled: true
+  mode: deployment
+  image:
+    repository: otel/opentelemetry-collector-contrib
+  podLabels:
+    plane: observability
+  # Mirrors deploy/observability/otel-collector-config.yaml's docker-compose pipeline:
+  # receive OTLP from the application and mcp planes, export traces to Tempo and
+  # metrics to Prometheus via a scrape endpoint.
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc: { endpoint: 0.0.0.0:4317 }
+          http: { endpoint: 0.0.0.0:4318 }
+    exporters:
+      otlp/tempo:
+        # A fixed hostname, not a release-qualified one: values.yaml is not
+        # template-rendered, so this must match tempo.fullnameOverride below exactly.
+        endpoint: "tempo:4317"
+        tls: { insecure: true }
+      prometheus:
+        endpoint: 0.0.0.0:8889
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          exporters: [otlp/tempo]
+        metrics:
+          receivers: [otlp]
+          exporters: [prometheus]
+
+kube-prometheus-stack:
+  enabled: true
+  grafana:
+    enabled: true
+    podLabels:
+      plane: observability
+  prometheus:
+    prometheusSpec:
+      podMetadata:
+        labels:
+          plane: observability
+
+loki:
+  enabled: true
+  podLabels:
+    plane: observability
+  # The chart's default (SimpleScalable) needs an S3-compatible bucket configured;
+  # SingleBinary + filesystem storage is the simple, dependency-free path suited to this
+  # chart's own bundled data plane. Point this at real object storage for production.
+  deploymentMode: SingleBinary
+  loki:
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+    schemaConfig:
+      configs:
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h
+  singleBinary:
+    replicas: 1
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  backend:
+    replicas: 0
+
+tempo:
+  enabled: true
+  # Fixed so opentelemetry-collector's exporter endpoint above (a literal, since
+  # values.yaml is not template-rendered) can reference it regardless of release name.
+  fullnameOverride: tempo
+  podLabels:
+    plane: observability
