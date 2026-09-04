@@ -93,3 +93,24 @@ class ResearchJobService:
 
     def list_evidence(self, tenant_id: str, job_id: UUID) -> builtins.list[EvidenceRecord]:
         return self._repository.list_evidence(tenant_id, job_id)
+
+
+class AsyncJobs:
+    """Adapts the synchronous ``ResearchJobService`` to an async ``JobsPort``.
+
+    ``research_platform.workflow.orchestration`` awaits its job-state calls, because a
+    Temporal-driven run answers them with an activity. This in-process service has no
+    activity to await - it is a plain in-memory write - so this adapter exists purely to
+    satisfy that async shape, not to add any real asynchrony.
+    """
+
+    def __init__(self, service: ResearchJobService) -> None:
+        self._service = service
+
+    async def transition(self, tenant_id: str, job_id: UUID, target: JobStatus) -> ResearchJob:
+        return self._service.transition(tenant_id, job_id, target)
+
+    async def add_evidence(
+        self, tenant_id: str, job_id: UUID, command: EvidenceRecordCreate
+    ) -> EvidenceRecord:
+        return self._service.add_evidence(tenant_id, job_id, command)
