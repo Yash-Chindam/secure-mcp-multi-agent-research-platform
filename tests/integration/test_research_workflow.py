@@ -16,12 +16,14 @@ from uuid import uuid4
 import pytest
 from crewai.lite_agent_output import LiteAgentOutput
 from crewai.tools import BaseTool
+from temporalio import activity
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from research_platform.agents.contracts import AnalysisResult
 from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
-from research_platform.domain.models import JobStatus, ResearchBudget, ResearchJob
+from research_platform.domain.models import EvidenceRecord, JobStatus, ResearchBudget, ResearchJob
 from research_platform.domain.tasks import AgentRole
 from research_platform.mcp.catalogue import default_registry
 from research_platform.mcp.gateway import CapabilityGateway, ExecutionRequest
@@ -247,3 +249,58 @@ async def test_a_reviewer_signal_lets_a_flagged_job_proceed() -> None:
 
     assert outcome.job.status is JobStatus.COMPLETED
     assert outcome.report is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_transient_activity_failure_recovers_via_temporals_own_retry() -> None:
+    """Section 14's "recovery after controlled failures", proven end to end.
+
+    ``research_workflow.AGENT_RETRY_POLICY`` bounds every agent activity to 3 attempts.
+    This activity fails its first attempt and succeeds on the second, with no retry logic
+    of this platform's own involved - Temporal's own mechanism recovers it.
+    """
+    job = new_job()
+    evidence_id_holder: list[str] = []
+    research_activities, job_activities, jobs = build_activities(
+        job=job, evidence_id_holder=evidence_id_holder, requires_reviewer=False
+    )
+    attempts: list[int] = []
+
+    @activity.defn(name="analyze_evidence")
+    async def flaky_analyze(job: ResearchJob, evidence: list[EvidenceRecord]) -> AnalysisResult:
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            raise RuntimeError("simulated transient failure")
+        return await research_activities.analyze(job, evidence)
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping(
+            data_converter=pydantic_data_converter
+        ) as env,
+        Worker(
+            env.client,
+            task_queue="research-jobs",
+            workflows=[ResearchJobWorkflow],
+            activities=[
+                research_activities.plan,
+                research_activities.research,
+                flaky_analyze,
+                research_activities.critique,
+                research_activities.report,
+                job_activities.transition,
+                job_activities.add_evidence,
+            ],
+        ),
+    ):
+        evidence_id_holder.append(str(uuid4()))
+        outcome = await env.client.execute_workflow(
+            ResearchJobWorkflow.run,
+            job,
+            id=f"research-job-{job.id}",
+            task_queue="research-jobs",
+        )
+
+    assert outcome.job.status is JobStatus.COMPLETED
+    assert outcome.report is not None
+    assert len(attempts) == 2
