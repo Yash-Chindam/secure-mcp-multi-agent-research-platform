@@ -209,6 +209,18 @@ class JobActivities:
 
     @activity.defn(name="transition_job")
     async def transition(self, tenant_id: str, job_id: UUID, target: JobStatus) -> ResearchJob:
+        """Persist a status transition, tolerating a call that already landed.
+
+        Temporal delivers an activity at least once: a worker can vanish after this
+        method has already returned but before that success was reported back, and the
+        replacement worker Temporal hands the retry to will call this again. Treating
+        "already at the target status" as success rather than an ``InvalidStateTransition``
+        keeps this activity safe to retry - the very thing a second worker's recovery
+        depends on should not itself be a new failure mode.
+        """
+        current = self.jobs.get(tenant_id, job_id)
+        if current.status is target:
+            return current
         return self.jobs.transition(tenant_id, job_id, target)
 
     @activity.defn(name="add_job_evidence")
