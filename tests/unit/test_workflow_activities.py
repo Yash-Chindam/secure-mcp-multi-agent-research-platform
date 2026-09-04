@@ -14,17 +14,20 @@ from research_platform.agents.contracts import (
     ResearchPlan,
     ResearchReport,
 )
+from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
 from research_platform.domain.models import (
     CriticVerdict,
     EvidenceRecord,
+    JobStatus,
     ResearchBudget,
     ResearchJob,
+    ResearchJobCreate,
     TrustLevel,
 )
 from research_platform.domain.tasks import AgentRole, ResearchTask
 from research_platform.mcp.catalogue import default_registry
 from research_platform.mcp.gateway import CapabilityGateway, ExecutionRequest
-from research_platform.workflow.activities import ResearchActivities
+from research_platform.workflow.activities import JobActivities, ResearchActivities
 
 TENANT = "acme"
 EVIDENCE_ID = uuid4()
@@ -289,3 +292,40 @@ async def test_every_activity_is_registered_with_a_temporal_name() -> None:
         "critique_analysis",
         "write_report",
     }
+
+
+@pytest.mark.asyncio
+async def test_transition_job_applies_a_new_status() -> None:
+    service = ResearchJobService(InMemoryJobRepository())
+    job = service.create(TENANT, "requester-1", ResearchJobCreate(question="What does it cost?"))
+    activities = JobActivities(jobs=service)
+    env = ActivityEnvironment()
+
+    updated = await env.run(activities.transition, TENANT, job.id, JobStatus.PLANNING)
+
+    assert updated.status is JobStatus.PLANNING
+
+
+@pytest.mark.asyncio
+async def test_transition_job_is_a_no_op_when_already_at_the_target_status() -> None:
+    """A retried activity call must not fail the very recovery it exists to support."""
+    service = ResearchJobService(InMemoryJobRepository())
+    job = service.create(TENANT, "requester-1", ResearchJobCreate(question="What does it cost?"))
+    activities = JobActivities(jobs=service)
+    env = ActivityEnvironment()
+    await env.run(activities.transition, TENANT, job.id, JobStatus.PLANNING)
+
+    repeated = await env.run(activities.transition, TENANT, job.id, JobStatus.PLANNING)
+
+    assert repeated.status is JobStatus.PLANNING
+
+
+@pytest.mark.asyncio
+async def test_transition_job_still_rejects_a_genuinely_invalid_transition() -> None:
+    service = ResearchJobService(InMemoryJobRepository())
+    job = service.create(TENANT, "requester-1", ResearchJobCreate(question="What does it cost?"))
+    activities = JobActivities(jobs=service)
+    env = ActivityEnvironment()
+
+    with pytest.raises(Exception, match="cannot transition"):
+        await env.run(activities.transition, TENANT, job.id, JobStatus.COMPLETED)
