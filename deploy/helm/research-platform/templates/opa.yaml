@@ -1,0 +1,66 @@
+{{- if .Values.opa.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "research-platform.fullname" . }}-opa-policy
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: opa
+data:
+  authz.rego: |
+{{ .Values.opa.policyRego | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "research-platform.fullname" . }}-opa
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: opa
+    plane: application
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "research-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: opa
+  template:
+    metadata:
+      labels:
+        {{- include "research-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: opa
+        plane: application
+    spec:
+      containers:
+        - name: opa
+          image: "{{ .Values.opa.image.repository }}:{{ .Values.opa.image.tag }}"
+          args: ["run", "--server", "--addr", ":8181", "/policy"]
+          ports:
+            - name: http
+              containerPort: 8181
+          volumeMounts:
+            - name: policy
+              mountPath: /policy
+              readOnly: true
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ include "research-platform.fullname" . }}-opa-policy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "research-platform.fullname" . }}-opa
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: opa
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8181
+      targetPort: http
+  selector:
+    {{- include "research-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: opa
+{{- end }}
