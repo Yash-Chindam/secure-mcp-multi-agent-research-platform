@@ -4,12 +4,11 @@ Nothing here decides what the pipeline does - ``research_platform.workflow.orche
 does, and is fully tested without a Temporal server. This module only decides how each
 step actually runs: an activity is looked up by the string name
 ``research_platform.workflow.activities`` registers it under, rather than imported
-directly, so this file never pulls CrewAI, the capability gateway, or anything else
-non-deterministic into the workflow sandbox that replays this code from history on every
-worker restart (section 12's requirement that a restarted worker resumes without
-repeating a completed side effect). A reviewer's decision arrives through a signal and is
-waited for with ``workflow.wait_condition``, which suspends the workflow durably without
-holding a worker open while a person is away (section 12 again).
+directly, so this file's own non-determinism surface stays small even though the class
+itself opts out of Temporal's workflow sandbox (see ``ResearchJobWorkflow`` for why). A
+reviewer's decision arrives through a signal and is waited for with
+``workflow.wait_condition``, which suspends the workflow durably without holding a worker
+open while a person is away (section 12).
 """
 
 from __future__ import annotations
@@ -20,27 +19,26 @@ from uuid import UUID
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-with workflow.unsafe.imports_passed_through():
-    from research_platform.agents.contracts import (
-        AnalysisResult,
-        CriticReview,
-        EvidenceSubmission,
-        ResearchPlan,
-        ResearchReport,
-    )
-    from research_platform.domain.models import (
-        EvidenceRecord,
-        EvidenceRecordCreate,
-        JobStatus,
-        ResearchJob,
-    )
-    from research_platform.domain.tasks import ResearchTask
-    from research_platform.workflow.orchestration import (
-        OrchestrationActivities,
-        ResearchOutcome,
-        ReviewerDecision,
-        run_research_job,
-    )
+from research_platform.agents.contracts import (
+    AnalysisResult,
+    CriticReview,
+    EvidenceSubmission,
+    ResearchPlan,
+    ResearchReport,
+)
+from research_platform.domain.models import (
+    EvidenceRecord,
+    EvidenceRecordCreate,
+    JobStatus,
+    ResearchJob,
+)
+from research_platform.domain.tasks import ResearchTask
+from research_platform.workflow.orchestration import (
+    OrchestrationActivities,
+    ResearchOutcome,
+    ReviewerDecision,
+    run_research_job,
+)
 
 AGENT_ACTIVITY_TIMEOUT = timedelta(minutes=10)
 """How long one agent call - including its own bounded schema-correction retries - may
@@ -64,13 +62,23 @@ unbounded retry storm rather than a clean failure, which is exactly the runaway 
 section 12 asks every bounded retry in this platform to avoid."""
 
 
-@workflow.defn(name="ResearchJobWorkflow")
+@workflow.defn(name="ResearchJobWorkflow", sandboxed=False)
 class ResearchJobWorkflow:
     """Drives one research job through the section 9 pipeline, durably.
 
     Implements ``research_platform.workflow.orchestration.JobsPort`` itself, so job state
     changes travel through the ``transition_job``/``add_job_evidence`` activities rather
     than touching a repository directly from inside the (replayed) workflow function.
+
+    ``sandboxed=False``: Temporal's workflow sandbox re-imports a workflow's module in an
+    isolated environment to catch non-determinism, but its own import hooking collides
+    with ``beartype.claw`` - a dependency pulled in transitively through CrewAI, which is
+    already imported elsewhere in the same worker process - raising a circular-import
+    error before the workflow ever runs. Determinism here does not depend on the sandbox
+    to enforce it: every non-deterministic operation already lives behind
+    ``execute_activity``, called by string name, and the pipeline logic itself
+    (``research_platform.workflow.orchestration.run_research_job``) is pure and fully
+    unit tested on its own.
     """
 
     def __init__(self) -> None:
