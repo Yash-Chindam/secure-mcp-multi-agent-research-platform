@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "research-platform.fullname" . }}-worker
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+    plane: application
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "research-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "research-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+        plane: application
+    spec:
+      serviceAccountName: {{ include "research-platform.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "research_platform.worker"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "research-platform.fullname" . }}-settings
+            {{- if .Values.existingSecretName }}
+            - secretRef:
+                name: {{ .Values.existingSecretName }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}

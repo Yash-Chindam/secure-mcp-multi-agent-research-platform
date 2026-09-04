@@ -1,0 +1,237 @@
+## Local development stack for the deployment topology in section 15 of
+## 01-secure-mcp-multi-agent-research-platform.md.
+##
+## Brings up every dependency the platform is actually wired to today - Temporal,
+## PostgreSQL, Redis, MinIO, Keycloak, OPA, and an observability path from the app's own
+## OpenTelemetry export through to Prometheus, Grafana, Loki and Tempo - plus the
+## platform's two own processes: the FastAPI ingress ("api") and the Temporal worker
+## ("worker"), built from the same Dockerfile section 15 already uses for the container
+## build. It is a development convenience, not the deployment topology itself: that is
+## what deploy/helm describes for a real cluster, with the NetworkPolicies this compose
+## file has no equivalent for.
+##
+## First run: create a realm and client in Keycloak (http://localhost:8081, admin/admin)
+## and a bucket in MinIO (http://localhost:9001, minioadmin/minioadmin) - neither is
+## auto-provisioned. Everything else works from a cold `docker compose up`.
+
+name: research-platform
+
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+x-app-environment: &app-environment
+  RESEARCH_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  RESEARCH_OPA_URL: http://opa:8181
+  RESEARCH_TEMPORAL_TARGET_HOST: temporal:7233
+  RESEARCH_WEB_ALLOWED_DOMAINS: ""
+
+services:
+  # ---- application plane ----
+
+  api:
+    <<: *app-image
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *app-environment
+    depends_on:
+      temporal:
+        condition: service_started
+      opa:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    networks: [application, data, observability]
+
+  worker:
+    <<: *app-image
+    command: ["python", "-m", "research_platform.worker"]
+    environment:
+      <<: *app-environment
+    depends_on:
+      temporal:
+        condition: service_started
+      opa:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    networks: [application, mcp, data, observability]
+
+  # ---- MCP plane ----
+  # The five section 8 servers run in-process inside api/worker today rather than as
+  # separately deployed services (mcp.fastmcp_executor drives them over an in-memory
+  # transport, not Streamable HTTP) - see worker.py's docstring. The "mcp" network
+  # exists so that boundary is already in place for when a server is split out.
+
+  # ---- data plane ----
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: research_platform
+      POSTGRES_USER: research
+      POSTGRES_PASSWORD: research
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U research -d research_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [data]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks: [data]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks: [data]
+
+  temporal-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [data]
+
+  temporal:
+    image: temporalio/auto-setup:1.24
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgres
+    ports:
+      - "7233:7233"
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    networks: [application, mcp, data]
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:8088
+    ports:
+      - "8088:8080"
+    depends_on:
+      temporal:
+        condition: service_started
+    networks: [data]
+
+  # ---- identity and policy ----
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8081:8080"
+    networks: [application]
+
+  opa:
+    image: openpolicyagent/opa:1.11.0
+    command: ["run", "--server", "--addr", ":8181", "/policy"]
+    volumes:
+      - ./policy:/policy:ro
+    ports:
+      - "8181:8181"
+    networks: [application, mcp]
+
+  # ---- observability plane ----
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.113.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./deploy/observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus scrape endpoint
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    networks: [application, mcp, observability]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [observability]
+
+  loki:
+    image: grafana/loki:3.2.1
+    ports:
+      - "3100:3100"
+    networks: [observability]
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deploy/observability/tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      - "3200:3200"
+    networks: [observability]
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./deploy/observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    networks: [observability]
+
+networks:
+  application:
+  mcp:
+  data:
+  observability:
+
+volumes:
+  postgres-data:
+  temporal-postgres-data:
+  redis-data:
+  minio-data:
+  prometheus-data:

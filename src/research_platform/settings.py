@@ -50,6 +50,15 @@ class Settings(BaseSettings):
         description="Where to export traces and metrics; unset records them without "
         "sending them anywhere.",
     )
+    temporal_target_host: str = Field(
+        default="localhost:7233",
+        description="Address of the Temporal frontend service the worker connects to.",
+    )
+    temporal_namespace: str = Field(default="default")
+    agent_llm: str = Field(
+        default="gpt-4o-mini",
+        description="The model identifier crewai.Agent is built with; not a secret.",
+    )
 
     @property
     def tokens_are_verified(self) -> bool:

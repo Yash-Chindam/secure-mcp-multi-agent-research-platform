@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "research-platform.fullname" . }}-settings
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+data:
+  RESEARCH_OIDC_ISSUER: {{ .Values.settings.oidcIssuer | quote }}
+  RESEARCH_OIDC_AUDIENCE: {{ .Values.settings.oidcAudience | quote }}
+  RESEARCH_OPA_URL: {{ tpl .Values.settings.opaUrl . | quote }}
+  RESEARCH_TEMPORAL_TARGET_HOST: {{ tpl .Values.settings.temporalTargetHost . | quote }}
+  RESEARCH_TEMPORAL_NAMESPACE: {{ .Values.settings.temporalNamespace | quote }}
+  RESEARCH_WEB_ALLOWED_DOMAINS: {{ .Values.settings.webAllowedDomains | quote }}
+  RESEARCH_OTEL_EXPORTER_OTLP_ENDPOINT: {{ tpl .Values.settings.otelExporterOtlpEndpoint . | quote }}

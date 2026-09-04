@@ -12,3 +12,5 @@ htmlcov/
 playwright-report/
 test-results/
 .env
+deploy/helm/*/charts/
+deploy/helm/*/tmpcharts-*/
