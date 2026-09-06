@@ -103,7 +103,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Validate docker-compose.yml
         run: docker compose config --quiet
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.2
       - name: Validate the Helm chart
