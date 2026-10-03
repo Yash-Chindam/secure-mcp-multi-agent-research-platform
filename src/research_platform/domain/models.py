@@ -223,6 +223,15 @@ class Finding(BaseModel):
         )
 
 
+class FindingRecord(Finding):
+    """A finding as stored against the job it belongs to (section 10)."""
+
+    id: UUID = Field(default_factory=uuid4)
+    job_id: UUID
+    tenant_id: str = Field(min_length=1, max_length=100)
+    recorded_at: datetime = Field(default_factory=utc_now)
+
+
 class InvalidStateTransition(ValueError):
     def __init__(self, current: JobStatus, target: JobStatus) -> None:
         super().__init__(f"cannot transition research job from {current} to {target}")
