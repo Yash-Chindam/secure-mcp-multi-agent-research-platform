@@ -4,11 +4,13 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
 from research_platform.api.routes import create_router
-from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
+from research_platform.application.jobs import ResearchJobService
 from research_platform.composition import (
+    build_job_repository,
     build_policy_stack,
     build_token_verifier,
     describe_identity,
+    describe_persistence,
 )
 from research_platform.mcp.catalogue import default_registry
 from research_platform.observability.metrics import configure_metrics
@@ -22,7 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.1.0",
     )
     resolved = settings or load_settings()
-    service = ResearchJobService(InMemoryJobRepository())
+    service = ResearchJobService(build_job_repository(resolved))
     registry = default_registry()
     policy = build_policy_stack(resolved)
     tracing = configure_tracing(resolved)
@@ -42,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": "ok",
             "identity": describe_identity(resolved),
             "authorization": policy.description,
+            "persistence": describe_persistence(resolved),
             "tracing": tracing.description,
             "metrics": metrics.description,
         }

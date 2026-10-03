@@ -16,6 +16,7 @@ dependencies = [
   "opentelemetry-api>=1.38,<2",
   "opentelemetry-exporter-otlp-proto-http>=1.38,<2",
   "opentelemetry-sdk>=1.38,<2",
+  "psycopg[binary,pool]>=3.2,<4",
   "pyjwt[crypto]>=2.10,<3",
   "pydantic-settings>=2.10,<3",
   "temporalio>=1.32,<2",

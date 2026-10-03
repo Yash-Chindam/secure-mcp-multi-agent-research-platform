@@ -66,6 +66,16 @@ class ResearchJob(BaseModel):
     source_requirements: list[str] = Field(default_factory=list)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     status: JobStatus = JobStatus.CREATED
+    workflow_id: str | None = Field(
+        default=None,
+        max_length=255,
+        description="The durable workflow this job is executing under, once one started.",
+    )
+    workflow_run_id: str | None = Field(
+        default=None,
+        max_length=255,
+        description="The specific run of that workflow, which a retry or reset replaces.",
+    )
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -73,6 +83,21 @@ class ResearchJob(BaseModel):
         if target not in ALLOWED_TRANSITIONS[self.status]:
             raise InvalidStateTransition(self.status, target)
         return self.model_copy(update={"status": target, "updated_at": utc_now()})
+
+    def with_checkpoint(self, *, workflow_id: str, workflow_run_id: str) -> ResearchJob:
+        """Record which durable execution owns this job (section 10's checkpoint).
+
+        Writing the checkpoint is what lets a reviewer decision, a cancellation or an
+        operator investigation find the running workflow again from the job alone, so it
+        is stored on the job rather than held only in the process that started it.
+        """
+        return self.model_copy(
+            update={
+                "workflow_id": workflow_id,
+                "workflow_run_id": workflow_run_id,
+                "updated_at": utc_now(),
+            }
+        )
 
 
 class TrustLevel(StrEnum):

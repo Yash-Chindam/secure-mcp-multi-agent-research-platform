@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from research_platform.api.dependencies import Identity
 from research_platform.application.jobs import JobNotFoundError, ResearchJobService
+from research_platform.domain.invocations import ToolInvocation
 from research_platform.domain.models import (
     EvidenceRecord,
     EvidenceRecordCreate,
@@ -77,6 +78,19 @@ def create_router(service: ResearchJobService, registry: CapabilityRegistry) -> 
     def list_evidence(job_id: UUID, identity: Identity) -> list[EvidenceRecord]:
         try:
             return service.list_evidence(identity.tenant_id, job_id)
+        except JobNotFoundError as error:
+            raise HTTPException(status_code=404, detail="research job not found") from error
+
+    @router.get("/jobs/{job_id}/invocations", response_model=list[ToolInvocation], tags=["mcp"])
+    def list_invocations(job_id: UUID, identity: Identity) -> list[ToolInvocation]:
+        """Return the audit trail for one job: every MCP call attempted on its behalf.
+
+        The records carry sanitized arguments and an argument digest rather than the
+        arguments themselves (section 11), so the trail can be read by a requester
+        without exposing what a sensitive argument contained.
+        """
+        try:
+            return service.list_invocations(identity.tenant_id, job_id)
         except JobNotFoundError as error:
             raise HTTPException(status_code=404, detail="research job not found") from error
 

@@ -26,8 +26,13 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from research_platform.agents.crew import build_agent
-from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
-from research_platform.composition import build_gateway, describe_identity
+from research_platform.application.jobs import ResearchJobService
+from research_platform.composition import (
+    build_gateway,
+    build_job_repository,
+    describe_identity,
+    describe_persistence,
+)
 from research_platform.domain.invocations import ErrorClass
 from research_platform.mcp.catalogue import DEFAULT_CAPABILITIES
 from research_platform.mcp.fastmcp_executor import FastMCPExecutor
@@ -87,15 +92,15 @@ def build_research_activities(settings: Settings) -> ResearchActivities:
     )
 
 
-def build_job_activities() -> JobActivities:
-    """The in-process job store this worker persists status transitions through.
+def build_job_activities(settings: Settings) -> JobActivities:
+    """The job store this worker persists status transitions through.
 
-    Matches ``main.py``'s current job service exactly: an in-memory system of record,
-    not yet the durable PostgreSQL store section 10 describes. A worker and the API
-    process each hold their own instance until that lands, so job state a worker writes
-    here is not yet visible to an API process reading it back.
+    With ``RESEARCH_DATABASE_URL`` set this is the same PostgreSQL system of record the
+    API process reads, which is what makes a status this worker writes visible to a
+    requester polling the API. Without it the worker falls back to in-process state that
+    no other process can see - usable for a single-process demo, not for a deployment.
     """
-    return JobActivities(jobs=ResearchJobService(InMemoryJobRepository()))
+    return JobActivities(jobs=ResearchJobService(build_job_repository(settings)))
 
 
 async def run(settings: Settings | None = None) -> None:
@@ -106,6 +111,7 @@ async def run(settings: Settings | None = None) -> None:
     logger.info("identity: %s", describe_identity(settings))
     logger.info("tracing: %s", tracing.description)
     logger.info("metrics: %s", metrics.description)
+    logger.info("persistence: %s", describe_persistence(settings))
 
     client = await Client.connect(
         settings.temporal_target_host,
@@ -114,7 +120,7 @@ async def run(settings: Settings | None = None) -> None:
     )
 
     research_activities = build_research_activities(settings)
-    job_activities = build_job_activities()
+    job_activities = build_job_activities(settings)
 
     worker = Worker(
         client,

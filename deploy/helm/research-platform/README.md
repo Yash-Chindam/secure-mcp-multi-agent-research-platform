@@ -32,7 +32,11 @@ chart's own development, change a required value's default).
 - **MCP servers**: `mcpServers` is empty by default. Every section 8 server runs
   in-process inside `api`/`worker` today (see `research_platform/worker.py`'s
   docstring), so there is nothing to list here yet.
-- **PostgreSQL as the system of record**: job state is still the in-memory store
-  `application/jobs.py` provides, not the `postgresql` dependency this chart deploys
-  (section 10 describes the durable version; it isn't wired up yet). The bundled
-  PostgreSQL is provisioned and ready for when it is.
+- **A restricted database role**: `settings.databaseUrl` connects the api and worker to
+  the bundled PostgreSQL as its owner, which works but bypasses nothing only because
+  the schema forces row-level security on the owner too. A superuser, or any role with
+  BYPASSRLS, is exempt from those policies entirely - the platform logs a warning at
+  startup when it finds itself connected as one. For production, create a dedicated
+  non-superuser role with SELECT/INSERT/UPDATE on the three tables and supply its URL
+  as `RESEARCH_DATABASE_URL` through `existingSecretName`, leaving
+  `settings.databaseUrl` empty.

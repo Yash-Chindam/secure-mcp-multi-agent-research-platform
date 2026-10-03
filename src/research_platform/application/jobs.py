@@ -1,9 +1,21 @@
+"""The application's system of record, behind one storage-agnostic port.
+
+``ResearchJobService`` holds the rules - a status transition is validated before it is
+written, evidence cannot be attached to a job that does not exist, every read is scoped
+to one tenant - and delegates storage to a ``JobRepository``. Two implement that port:
+``InMemoryJobRepository`` here, for development and tests, and
+``research_platform.persistence.PostgresJobRepository``, the durable store section 10
+asks for.
+"""
+
 from __future__ import annotations
 
 import builtins
 from threading import RLock
+from typing import Protocol
 from uuid import UUID
 
+from research_platform.domain.invocations import ToolInvocation
 from research_platform.domain.models import (
     EvidenceRecord,
     EvidenceRecordCreate,
@@ -17,12 +29,38 @@ class JobNotFoundError(LookupError):
     pass
 
 
+class JobRepository(Protocol):
+    """Storage for the jobs, evidence and audit trail of one deployment.
+
+    Every method takes the tenant explicitly rather than inferring it: a repository must
+    not be able to answer a question that was never scoped to a tenant, which is what
+    makes the cross-tenant guarantee in section 14 checkable at this boundary.
+    """
+
+    def add(self, job: ResearchJob) -> ResearchJob: ...
+
+    def get(self, tenant_id: str, job_id: UUID) -> ResearchJob: ...
+
+    def list(self, tenant_id: str) -> builtins.list[ResearchJob]: ...
+
+    def update(self, job: ResearchJob) -> ResearchJob: ...
+
+    def add_evidence(self, evidence: EvidenceRecord) -> EvidenceRecord: ...
+
+    def list_evidence(self, tenant_id: str, job_id: UUID) -> builtins.list[EvidenceRecord]: ...
+
+    def record_invocation(self, invocation: ToolInvocation) -> ToolInvocation: ...
+
+    def list_invocations(self, tenant_id: str, job_id: UUID) -> builtins.list[ToolInvocation]: ...
+
+
 class InMemoryJobRepository:
     """Development repository that enforces tenant isolation at every lookup."""
 
     def __init__(self) -> None:
         self._jobs: dict[tuple[str, UUID], ResearchJob] = {}
         self._evidence: dict[tuple[str, UUID], list[EvidenceRecord]] = {}
+        self._invocations: dict[tuple[str, UUID], list[ToolInvocation]] = {}
         self._lock = RLock()
 
     def add(self, job: ResearchJob) -> ResearchJob:
@@ -61,9 +99,31 @@ class InMemoryJobRepository:
         with self._lock:
             return list(self._evidence.get((tenant_id, job_id), []))
 
+    def record_invocation(self, invocation: ToolInvocation) -> ToolInvocation:
+        """Append one audit record, without requiring the job it names to exist.
+
+        An audit record is written whether or not its job is present - a denial for an
+        unknown job is itself worth keeping - so this deliberately does not check that it
+        exists. The write is idempotent on the record's own identifier, because an
+        activity Temporal redelivers re-reports the audit record it already persisted and
+        the trail must not count that call twice.
+        """
+        key = (invocation.tenant_id, invocation.job_id)
+        with self._lock:
+            recorded = self._invocations.setdefault(key, [])
+            if any(existing.id == invocation.id for existing in recorded):
+                return invocation
+            recorded.append(invocation)
+        return invocation
+
+    def list_invocations(self, tenant_id: str, job_id: UUID) -> builtins.list[ToolInvocation]:
+        with self._lock:
+            recorded = list(self._invocations.get((tenant_id, job_id), []))
+        return sorted(recorded, key=lambda invocation: invocation.started_at)
+
 
 class ResearchJobService:
-    def __init__(self, repository: InMemoryJobRepository) -> None:
+    def __init__(self, repository: JobRepository) -> None:
         self._repository = repository
 
     def create(self, tenant_id: str, requester_id: str, command: ResearchJobCreate) -> ResearchJob:
@@ -84,6 +144,15 @@ class ResearchJobService:
         job = self.get(tenant_id, job_id)
         return self._repository.update(job.transition_to(target))
 
+    def record_checkpoint(
+        self, tenant_id: str, job_id: UUID, *, workflow_id: str, workflow_run_id: str
+    ) -> ResearchJob:
+        """Store which durable execution owns this job, leaving its status untouched."""
+        job = self.get(tenant_id, job_id)
+        return self._repository.update(
+            job.with_checkpoint(workflow_id=workflow_id, workflow_run_id=workflow_run_id)
+        )
+
     def add_evidence(
         self, tenant_id: str, job_id: UUID, command: EvidenceRecordCreate
     ) -> EvidenceRecord:
@@ -94,13 +163,21 @@ class ResearchJobService:
     def list_evidence(self, tenant_id: str, job_id: UUID) -> builtins.list[EvidenceRecord]:
         return self._repository.list_evidence(tenant_id, job_id)
 
+    def record_invocation(self, invocation: ToolInvocation) -> ToolInvocation:
+        return self._repository.record_invocation(invocation)
+
+    def list_invocations(self, tenant_id: str, job_id: UUID) -> builtins.list[ToolInvocation]:
+        """Return the audit trail for one job, oldest call first."""
+        self.get(tenant_id, job_id)
+        return self._repository.list_invocations(tenant_id, job_id)
+
 
 class AsyncJobs:
     """Adapts the synchronous ``ResearchJobService`` to an async ``JobsPort``.
 
     ``research_platform.workflow.orchestration`` awaits its job-state calls, because a
     Temporal-driven run answers them with an activity. This in-process service has no
-    activity to await - it is a plain in-memory write - so this adapter exists purely to
+    activity to await - it is a plain repository write - so this adapter exists purely to
     satisfy that async shape, not to add any real asynchrony.
     """
 

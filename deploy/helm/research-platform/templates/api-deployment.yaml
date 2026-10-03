@@ -34,6 +34,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "research-platform.fullname" . }}-settings
+            {{- if .Values.settings.databaseUrl }}
+            - secretRef:
+                name: {{ include "research-platform.fullname" . }}-database
+            {{- end }}
             {{- if .Values.existingSecretName }}
             - secretRef:
                 name: {{ .Values.existingSecretName }}

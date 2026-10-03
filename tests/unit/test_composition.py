@@ -2,11 +2,14 @@ from uuid import uuid4
 
 import pytest
 
+from research_platform.application.jobs import InMemoryJobRepository
 from research_platform.composition import (
     build_gateway,
+    build_job_repository,
     build_policy_stack,
     build_token_verifier,
     describe_identity,
+    describe_persistence,
 )
 from research_platform.domain.models import AccessClass, ResearchBudget
 from research_platform.domain.tasks import AgentRole
@@ -162,3 +165,17 @@ def test_the_identity_source_is_described() -> None:
             oidc_audience="research-platform",
         )
     )
+
+
+def test_without_a_database_job_state_is_held_in_process_and_says_so() -> None:
+    settings = Settings(database_url=None)
+
+    assert isinstance(build_job_repository(settings), InMemoryJobRepository)
+    assert "in-process" in describe_persistence(settings)
+
+
+def test_a_configured_database_is_described_as_the_system_of_record() -> None:
+    settings = Settings(database_url="postgresql://research@db/research_platform")
+
+    assert settings.state_is_durable
+    assert describe_persistence(settings) == "PostgreSQL system of record"

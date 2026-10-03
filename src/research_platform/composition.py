@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_platform.application.jobs import InMemoryJobRepository, JobRepository
 from research_platform.auth import KeyResolver, TokenVerifier
 from research_platform.mcp.catalogue import default_registry
 from research_platform.mcp.gateway import CapabilityExecutor, CapabilityGateway
 from research_platform.mcp.opa import AllOfPolicyEngine, OpaPolicyEngine
 from research_platform.mcp.policy import PolicyEngine, RegistryPolicyEngine
 from research_platform.mcp.registry import CapabilityRegistry
+from research_platform.persistence.postgres import build_repository
 from research_platform.settings import Settings
 
 
@@ -83,3 +85,22 @@ def build_gateway(
         executor=executor,
         policy=build_policy_stack(settings).engine,
     )
+
+
+def build_job_repository(settings: Settings) -> JobRepository:
+    """Return the durable system of record, or the in-process one when none is configured.
+
+    The in-process repository is a development convenience and is not shared between an
+    API process and a worker, so a deployment that runs both must configure a database.
+    ``describe_persistence`` states which of the two is in use at startup rather than
+    leaving it to be inferred.
+    """
+    if not settings.database_url:
+        return InMemoryJobRepository()
+    return build_repository(settings.database_url)
+
+
+def describe_persistence(settings: Settings) -> str:
+    if settings.state_is_durable:
+        return "PostgreSQL system of record"
+    return "in-process job state (no database configured; not shared between processes)"

@@ -31,6 +31,25 @@ jobs:
   unit:
     name: Unit tests and coverage
     runs-on: ubuntu-latest
+    # The repository contract tests run against a real PostgreSQL rather than a
+    # substitute: the row-level security policies that enforce tenant isolation are a
+    # database behaviour, and nothing but the database can prove they hold.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RESEARCH_TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -48,6 +67,25 @@ jobs:
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
+    # The repository contract tests run against a real PostgreSQL rather than a
+    # substitute: the row-level security policies that enforce tenant isolation are a
+    # database behaviour, and nothing but the database can prove they hold.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RESEARCH_TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

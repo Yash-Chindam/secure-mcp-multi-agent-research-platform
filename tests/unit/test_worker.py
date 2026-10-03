@@ -35,7 +35,8 @@ def test_an_unconfigured_executor_refuses_every_call_rather_than_defaulting() ->
         UnconfiguredExecutor().execute(request)
 
 
-def test_build_job_activities_returns_a_working_job_activities_instance() -> None:
-    activities = build_job_activities()
+def test_a_worker_with_no_database_configured_falls_back_to_in_process_job_state() -> None:
+    """Usable for a single-process demo; a deployment must configure a database."""
+    activities = build_job_activities(Settings(database_url=None))
 
     assert isinstance(activities, JobActivities)
