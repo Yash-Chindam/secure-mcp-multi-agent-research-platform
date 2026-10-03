@@ -72,3 +72,22 @@ def test_evidence_hash_is_validated_at_api_boundary(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.integration
+def test_the_audit_trail_is_readable_for_the_tenants_own_job_only(client: TestClient) -> None:
+    created = client.post(
+        "/api/v1/jobs", headers=headers(), json={"question": "Compare the release claims."}
+    ).json()
+
+    own = client.get(f"/api/v1/jobs/{created['id']}/invocations", headers=headers())
+    other = client.get(f"/api/v1/jobs/{created['id']}/invocations", headers=headers("tenant-b"))
+
+    assert own.status_code == 200
+    assert own.json() == []
+    assert other.status_code == 404
+
+
+@pytest.mark.integration
+def test_health_states_whether_job_state_is_durable(client: TestClient) -> None:
+    assert "in-process job state" in client.get("/health").json()["persistence"]

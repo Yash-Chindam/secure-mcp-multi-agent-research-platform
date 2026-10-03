@@ -50,6 +50,10 @@ class Settings(BaseSettings):
         description="Where to export traces and metrics; unset records them without "
         "sending them anywhere.",
     )
+    database_url: str | None = Field(
+        default=None,
+        description="PostgreSQL system of record; unset keeps job state in process memory.",
+    )
     temporal_target_host: str = Field(
         default="localhost:7233",
         description="Address of the Temporal frontend service the worker connects to.",
@@ -72,6 +76,10 @@ class Settings(BaseSettings):
         if not self.oidc_issuer:
             raise ValueError("a token issuer must be configured before keys can be fetched")
         return f"{self.oidc_issuer.rstrip('/')}/protocol/openid-connect/certs"
+
+    @property
+    def state_is_durable(self) -> bool:
+        return bool(self.database_url)
 
     @property
     def policy_is_externally_enforced(self) -> bool:

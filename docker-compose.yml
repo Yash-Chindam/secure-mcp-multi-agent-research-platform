@@ -10,6 +10,12 @@
 ## what deploy/helm describes for a real cluster, with the NetworkPolicies this compose
 ## file has no equivalent for.
 ##
+## The api and worker share one PostgreSQL system of record, so a status the worker
+## writes is visible to the API immediately. Both connect as the database owner here,
+## which bypasses the row-level security policies the schema installs - convenient for
+## local work, and reported as a warning at startup. See deploy/helm's README for the
+## restricted role a real deployment should connect as instead.
+##
 ## First run: create a realm and client in Keycloak (http://localhost:8081, admin/admin)
 ## and a bucket in MinIO (http://localhost:9001, minioadmin/minioadmin) - neither is
 ## auto-provisioned. Everything else works from a cold `docker compose up`.
@@ -25,6 +31,7 @@ x-app-environment: &app-environment
   RESEARCH_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
   RESEARCH_OPA_URL: http://opa:8181
   RESEARCH_TEMPORAL_TARGET_HOST: temporal:7233
+  RESEARCH_DATABASE_URL: postgresql://research:research@postgres:5432/research_platform
   RESEARCH_WEB_ALLOWED_DOMAINS: ""
 
 services:
@@ -37,6 +44,8 @@ services:
     environment:
       <<: *app-environment
     depends_on:
+      postgres:
+        condition: service_healthy
       temporal:
         condition: service_started
       opa:
@@ -51,6 +60,8 @@ services:
     environment:
       <<: *app-environment
     depends_on:
+      postgres:
+        condition: service_healthy
       temporal:
         condition: service_started
       opa:
