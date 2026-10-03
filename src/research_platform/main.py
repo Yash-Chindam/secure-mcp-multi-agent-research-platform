@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from research_platform.api.routes import create_router
 from research_platform.application.jobs import ResearchJobService
+from research_platform.application.workflows import WorkflowStarter
 from research_platform.composition import (
     build_job_repository,
     build_policy_stack,
@@ -16,9 +17,12 @@ from research_platform.mcp.catalogue import default_registry
 from research_platform.observability.metrics import configure_metrics
 from research_platform.observability.tracing import configure_tracing
 from research_platform.settings import Settings, load_settings
+from research_platform.workflow.starter import TemporalWorkflowStarter
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, workflows: WorkflowStarter | None = None
+) -> FastAPI:
     app = FastAPI(
         title="Secure MCP Multi-Agent Research Platform",
         version="0.1.0",
@@ -29,13 +33,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     policy = build_policy_stack(resolved)
     tracing = configure_tracing(resolved)
     metrics = configure_metrics(resolved)
+    if workflows is None and resolved.workflows_enabled:
+        workflows = TemporalWorkflowStarter.for_service(
+            resolved.temporal_target_host, namespace=resolved.temporal_namespace
+        )
 
     app.state.settings = resolved
     app.state.job_service = service
     app.state.capability_registry = registry
     app.state.policy_stack = policy
     app.state.token_verifier = build_token_verifier(resolved)
-    app.include_router(create_router(service, registry))
+    app.state.workflows = workflows
+    app.include_router(create_router(service, registry, workflows))
 
     @app.get("/health", tags=["operations"])
     def health() -> dict[str, str]:
@@ -45,6 +54,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "identity": describe_identity(resolved),
             "authorization": policy.description,
             "persistence": describe_persistence(resolved),
+            "workflows": (
+                "each new job starts a durable workflow"
+                if workflows is not None
+                else "disabled (jobs are recorded but not executed)"
+            ),
             "tracing": tracing.description,
             "metrics": metrics.description,
         }

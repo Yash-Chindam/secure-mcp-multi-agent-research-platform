@@ -45,11 +45,9 @@ from research_platform.observability.metrics import configure_metrics
 from research_platform.observability.tracing import configure_tracing
 from research_platform.settings import Settings, load_settings
 from research_platform.workflow.activities import JobActivities, ResearchActivities
-from research_platform.workflow.research_workflow import ResearchJobWorkflow
+from research_platform.workflow.research_workflow import TASK_QUEUE, ResearchJobWorkflow
 
 logger = logging.getLogger(__name__)
-
-TASK_QUEUE = "research-jobs"
 
 
 class UnconfiguredExecutor:
@@ -67,8 +65,26 @@ class UnconfiguredExecutor:
         )
 
 
-def build_research_activities(settings: Settings) -> ResearchActivities:
-    """Build the researcher's tools and agent factory from what this deployment configured."""
+def build_job_service(settings: Settings) -> ResearchJobService:
+    """The system of record this worker writes job state and its audit trail to.
+
+    With ``RESEARCH_DATABASE_URL`` set this is the same PostgreSQL store the API process
+    reads, which is what makes a status this worker writes visible to a requester polling
+    the API. Without it the worker falls back to in-process state that no other process
+    can see - usable for a single-process demo, not for a deployment.
+    """
+    return ResearchJobService(build_job_repository(settings))
+
+
+def build_research_activities(
+    settings: Settings, jobs: ResearchJobService | None = None
+) -> ResearchActivities:
+    """Build the researcher's tools and agent factory from what this deployment configured.
+
+    When a job service is supplied, every MCP call the gateway decides - allowed, denied
+    or failed - is written to it as an audit record, which is what makes section 10's
+    ``ToolInvocation`` trail durable rather than something only the calling agent saw.
+    """
     servers = build_servers(
         web_backend=StaticWebBackend(),
         web_policy=(
@@ -84,7 +100,12 @@ def build_research_activities(settings: Settings) -> ResearchActivities:
     if not servers:
         logger.warning("no MCP backend is configured; agents will have no tools to call")
 
-    gateway = build_gateway(executor=executor, settings=settings, registry=registry)
+    gateway = build_gateway(
+        executor=executor,
+        settings=settings,
+        registry=registry,
+        audit=jobs.record_invocation if jobs is not None else None,
+    )
     return ResearchActivities(
         gateway=gateway,
         registry=registry,
@@ -92,15 +113,11 @@ def build_research_activities(settings: Settings) -> ResearchActivities:
     )
 
 
-def build_job_activities(settings: Settings) -> JobActivities:
-    """The job store this worker persists status transitions through.
-
-    With ``RESEARCH_DATABASE_URL`` set this is the same PostgreSQL system of record the
-    API process reads, which is what makes a status this worker writes visible to a
-    requester polling the API. Without it the worker falls back to in-process state that
-    no other process can see - usable for a single-process demo, not for a deployment.
-    """
-    return JobActivities(jobs=ResearchJobService(build_job_repository(settings)))
+def build_job_activities(
+    settings: Settings, jobs: ResearchJobService | None = None
+) -> JobActivities:
+    """The activities that persist status transitions and evidence."""
+    return JobActivities(jobs=jobs or build_job_service(settings))
 
 
 async def run(settings: Settings | None = None) -> None:
@@ -119,8 +136,9 @@ async def run(settings: Settings | None = None) -> None:
         data_converter=pydantic_data_converter,
     )
 
-    research_activities = build_research_activities(settings)
-    job_activities = build_job_activities(settings)
+    jobs = build_job_service(settings)
+    research_activities = build_research_activities(settings, jobs)
+    job_activities = build_job_activities(settings, jobs)
 
     worker = Worker(
         client,

@@ -126,14 +126,19 @@ async def run_research_job(
     """Drive one research job through the section 9 pipeline to a terminal status."""
     metrics = metrics or get_metrics()
     tracer = get_tracer()
-    with tracer.start_as_current_span("research.job") as span:
-        span.set_attribute("job.id", str(job.id))
-        span.set_attribute("tenant.id", job.tenant_id)
-        metrics.active_jobs.add(1, {"tenant.id": job.tenant_id})
-        try:
-            return await _run_research_job(job, jobs=jobs, activities=activities, metrics=metrics)
-        finally:
-            metrics.active_jobs.add(-1, {"tenant.id": job.tenant_id})
+    # Started without being made the current span. A workflow function does not own the
+    # context it runs in: Temporal may evict it from a worker's cache mid-await and close
+    # it from a different context, where detaching a context token raises. Nothing is
+    # lost by this - the activities it drives run in their own contexts regardless.
+    span = tracer.start_span("research.job")
+    span.set_attribute("job.id", str(job.id))
+    span.set_attribute("tenant.id", job.tenant_id)
+    metrics.active_jobs.add(1, {"tenant.id": job.tenant_id})
+    try:
+        return await _run_research_job(job, jobs=jobs, activities=activities, metrics=metrics)
+    finally:
+        metrics.active_jobs.add(-1, {"tenant.id": job.tenant_id})
+        span.end()
 
 
 async def _run_research_job(

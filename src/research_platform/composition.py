@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from research_platform.application.jobs import InMemoryJobRepository, JobRepository
 from research_platform.auth import KeyResolver, TokenVerifier
 from research_platform.mcp.catalogue import default_registry
-from research_platform.mcp.gateway import CapabilityExecutor, CapabilityGateway
+from research_platform.mcp.gateway import CapabilityExecutor, CapabilityGateway, InvocationSink
 from research_platform.mcp.opa import AllOfPolicyEngine, OpaPolicyEngine
 from research_platform.mcp.policy import PolicyEngine, RegistryPolicyEngine
 from research_platform.mcp.registry import CapabilityRegistry
@@ -78,12 +78,14 @@ def build_gateway(
     executor: CapabilityExecutor,
     settings: Settings,
     registry: CapabilityRegistry | None = None,
+    audit: InvocationSink | None = None,
 ) -> CapabilityGateway:
     """Build the single governed path to the MCP capabilities."""
     return CapabilityGateway(
         registry=registry or default_registry(),
         executor=executor,
         policy=build_policy_stack(settings).engine,
+        audit=audit,
     )
 
 

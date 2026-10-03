@@ -40,6 +40,9 @@ from research_platform.workflow.orchestration import (
     run_research_job,
 )
 
+TASK_QUEUE = "research-jobs"
+"""The one queue a worker polls and the API starts workflows on."""
+
 AGENT_ACTIVITY_TIMEOUT = timedelta(minutes=10)
 """How long one agent call - including its own bounded schema-correction retries - may
 run before Temporal considers the activity itself to have failed."""

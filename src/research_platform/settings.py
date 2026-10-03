@@ -54,6 +54,11 @@ class Settings(BaseSettings):
         default=None,
         description="PostgreSQL system of record; unset keeps job state in process memory.",
     )
+    workflows_enabled: bool = Field(
+        default=False,
+        description="Start a durable workflow for each new job; off leaves a created job "
+        "for a caller to drive by hand.",
+    )
     temporal_target_host: str = Field(
         default="localhost:7233",
         description="Address of the Temporal frontend service the worker connects to.",

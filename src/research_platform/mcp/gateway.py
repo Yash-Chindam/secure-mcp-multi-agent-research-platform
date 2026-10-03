@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -27,6 +29,16 @@ from research_platform.mcp.registry import Capability, CapabilityRegistry
 from research_platform.mcp.sanitizer import UntrustedContent, sanitize_result
 from research_platform.observability.metrics import PlatformMetrics, get_metrics
 from research_platform.observability.tracing import get_tracer
+
+logger = logging.getLogger(__name__)
+
+InvocationSink = Callable[[ToolInvocation], object]
+"""Where the gateway hands each audit record once a call has been decided.
+
+In a deployment this is ``ResearchJobService.record_invocation``, which makes the trail
+durable; left unset, records are still returned to the caller and observed as metrics
+but are not stored anywhere.
+"""
 
 
 class CapabilityDenied(PermissionError):
@@ -165,6 +177,7 @@ class CapabilityGateway:
         breaker: CircuitBreaker | None = None,
         tracer: Tracer | None = None,
         metrics: PlatformMetrics | None = None,
+        audit: InvocationSink | None = None,
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -173,6 +186,7 @@ class CapabilityGateway:
         self._breaker = breaker or CircuitBreaker()
         self._tracer = tracer or get_tracer()
         self._metrics = metrics or get_metrics()
+        self._audit = audit
 
     @property
     def budgets(self) -> BudgetLedger:
@@ -251,6 +265,29 @@ class CapabilityGateway:
         self._metrics.mcp_call_duration.record(invocation.duration_ms or 0, attributes)
         if invocation.outcome is InvocationOutcome.DENIED:
             self._metrics.permission_denials.add(1, attributes)
+        self._record(invocation, span)
+
+    def _record(self, invocation: ToolInvocation, span: Span) -> None:
+        """Hand the audit record to the configured sink, for every outcome alike.
+
+        By the time a record exists the call has already been decided - refused, or
+        executed against the server - so a sink that cannot store it must not change
+        what the caller is told happened. The failure is made loud instead: logged with
+        the record's identifier and marked on the span, so a gap in the trail is itself
+        visible rather than silent.
+        """
+        if self._audit is None:
+            return
+        try:
+            self._audit(invocation)
+        except Exception:
+            span.set_attribute("mcp.audit_persisted", False)
+            logger.exception(
+                "audit record %s for %s.%s could not be persisted",
+                invocation.id,
+                invocation.mcp_server,
+                invocation.capability,
+            )
 
     def _invoke(
         self,

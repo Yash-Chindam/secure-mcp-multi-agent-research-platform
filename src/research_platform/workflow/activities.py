@@ -201,8 +201,8 @@ class JobActivities:
     protocol; when Temporal drives it, ``research_platform.workflow.research_workflow``
     implements that protocol by calling these two activities, so a status transition or
     a piece of evidence survives a worker restart the same way every other step in the
-    pipeline does (section 12). ``ResearchJobService`` itself has no such durability -
-    it is the in-process, in-memory system of record this wraps.
+    pipeline does (section 12). Both are safe to redeliver: Temporal runs an activity at
+    least once, so each recognises a call that already landed instead of repeating it.
     """
 
     jobs: ResearchJobService
@@ -227,4 +227,20 @@ class JobActivities:
     async def add_evidence(
         self, tenant_id: str, job_id: UUID, command: EvidenceRecordCreate
     ) -> EvidenceRecord:
+        """Persist one piece of evidence, tolerating a call that already landed.
+
+        The same at-least-once delivery ``transition`` guards against applies here, and
+        an unguarded retry would store the excerpt a second time under a new identifier -
+        a duplicated side effect section 12 rules out. A record is the same record when
+        the same task captured the same content from the same source through the same
+        tool call, so that is what a redelivery is recognised by.
+        """
+        for existing in self.jobs.list_evidence(tenant_id, job_id):
+            if (
+                existing.content_hash == command.content_hash
+                and existing.producing_task_id == command.producing_task_id
+                and existing.tool_invocation_id == command.tool_invocation_id
+                and str(existing.source_uri) == str(command.source_uri)
+            ):
+                return existing
         return self.jobs.add_evidence(tenant_id, job_id, command)

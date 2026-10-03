@@ -8,6 +8,7 @@ from research_platform.settings import Settings
 from research_platform.worker import (
     UnconfiguredExecutor,
     build_job_activities,
+    build_job_service,
     build_research_activities,
 )
 from research_platform.workflow.activities import JobActivities, ResearchActivities
@@ -40,3 +41,15 @@ def test_a_worker_with_no_database_configured_falls_back_to_in_process_job_state
     activities = build_job_activities(Settings(database_url=None))
 
     assert isinstance(activities, JobActivities)
+
+
+def test_a_worker_writes_its_audit_trail_and_job_state_to_one_shared_store() -> None:
+    """What the gateway records and what the job activities persist must be one store."""
+    settings = Settings(database_url=None, web_allowed_domains="vendor.test")
+    jobs = build_job_service(settings)
+
+    research = build_research_activities(settings, jobs)
+    persistence = build_job_activities(settings, jobs)
+
+    assert persistence.jobs is jobs
+    assert research.gateway._audit == jobs.record_invocation
