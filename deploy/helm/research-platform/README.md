@@ -29,9 +29,19 @@ chart's own development, change a required value's default).
   falling back to development identity headers.
 - **OPA**: `opa.policyRego` is empty by default - the `--set-file` above is required, not
   optional, for OPA to do anything but refuse every request.
-- **MCP servers**: `mcpServers` is empty by default. Every section 8 server runs
-  in-process inside `api`/`worker` today (see `research_platform/worker.py`'s
-  docstring), so there is nothing to list here yet.
+- **MCP backends**: every section 8 server is built only when its backend *and* its
+  boundary are configured (`settings.webAllowedDomains`, `workspaceRoots`,
+  `analyticsTenantSchemas` + `RESEARCH_ANALYTICS_DATABASE_URL`, `githubRepositories` +
+  `RESEARCH_GITHUB_TOKEN`, `sandboxImage`). With none set, agents have no tools. List a
+  server under `mcpServers` to run it as its own Deployment over Streamable HTTP; set
+  `settings.mcpClientId` and `RESEARCH_MCP_CLIENT_SECRET` (a Keycloak client with
+  service accounts enabled) so the worker calls it with a short-lived token, which the
+  server verifies whenever `oidcIssuer`/`oidcAudience` are set.
+- **The sandbox runtime**: `sandboxImage` uses a container runtime the pod can reach.
+  Mounting a runtime socket into a pod is itself a privilege, so for a real cluster back
+  `SandboxBackend` with a Job or a sandboxed runtime class rather than enabling this.
+- **A model provider key**: the worker's agents call an LLM through CrewAI; supply the
+  provider's key (for example `OPENAI_API_KEY`) through `existingSecretName`.
 - **A restricted database role**: `settings.databaseUrl` connects the api and worker to
   the bundled PostgreSQL as its owner, which works but bypasses nothing only because
   the schema forces row-level security on the owner too. A superuser, or any role with

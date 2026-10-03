@@ -1,4 +1,4 @@
-"""Assemble the five research MCP servers section 8 describes.
+"""Assemble the research MCP servers section 8 describes, and the evidence server.
 
 A server is registered only when the deployment gave it something to read. An
 unconfigured service is left absent rather than mounted against a placeholder, so a call
@@ -15,6 +15,11 @@ from research_platform.mcp.servers.backends import (
     SandboxBackend,
     SqlBackend,
     WebBackend,
+)
+from research_platform.mcp.servers.evidence_server import (
+    EvidenceService,
+    EvidenceSource,
+    build_evidence_server,
 )
 from research_platform.mcp.servers.filesystem_boundary import WorkspaceRoots
 from research_platform.mcp.servers.filesystem_server import (
@@ -42,6 +47,7 @@ def build_servers(
     repository_allowlist: RepositoryAllowlist | None = None,
     sandbox_backend: SandboxBackend | None = None,
     sandbox_limits: SandboxLimits | None = None,
+    evidence_source: EvidenceSource | None = None,
 ) -> dict[str, FastMCP]:
     """Build every server the deployment has configured a backend and boundary for."""
     servers: dict[str, FastMCP] = {}
@@ -75,5 +81,8 @@ def build_servers(
                 limits=sandbox_limits or SandboxLimits(),
             )
         )
+
+    if evidence_source is not None:
+        servers["evidence"] = build_evidence_server(EvidenceService(source=evidence_source))
 
     return servers

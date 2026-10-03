@@ -1,9 +1,11 @@
 {{/*
-Independently scalable MCP servers (section 15). Empty by default: every section 8
-server runs in-process inside api/worker today rather than as its own deployment (see
-worker.py's docstring) - this template exists so listing a server under
-`mcpServers` in values.yaml is enough to give it its own scalable Deployment once a
-server is split out to run standalone over Streamable HTTP.
+Independently scalable MCP servers (section 15). Each entry under `mcpServers` runs one
+server as its own Deployment and Service over Streamable HTTP
+(`python -m research_platform.mcp.servers.serve <name>`), and the settings ConfigMap
+points the worker at it through RESEARCH_MCP_SERVER_URLS. A server not listed here still
+runs in process inside the worker when its backend is configured. The server reads the
+same settings ConfigMap and secrets as the worker, so its backend and boundary are
+configured in one place.
 */}}
 {{- range .Values.mcpServers }}
 apiVersion: apps/v1
@@ -32,13 +34,31 @@ spec:
         - name: mcp-{{ .name }}
           image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
-          command: ["python", "-m", "research_platform.mcp.servers.{{ .name | replace "-" "_" }}", "--http"]
+          command:
+            - python
+            - -m
+            - research_platform.mcp.servers.serve
+            - {{ .name | quote }}
+            - --port
+            - {{ .port | default 8000 | quote }}
           ports:
             - name: http
               containerPort: {{ .port | default 8000 }}
           envFrom:
             - configMapRef:
                 name: {{ include "research-platform.fullname" $ }}-settings
+            {{- if $.Values.settings.databaseUrl }}
+            - secretRef:
+                name: {{ include "research-platform.fullname" $ }}-database
+            {{- end }}
+            {{- if $.Values.existingSecretName }}
+            - secretRef:
+                name: {{ $.Values.existingSecretName }}
+            {{- end }}
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
           {{- if .resources }}
           resources:
             {{- toYaml .resources | nindent 12 }}
