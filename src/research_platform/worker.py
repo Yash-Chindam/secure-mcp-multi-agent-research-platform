@@ -7,13 +7,10 @@ independent of the FastAPI ingress - this module is that unit's entrypoint. It r
 gateway the rest of the platform uses, and polls one task queue until stopped.
 
 A backend a deployment has not configured is left out rather than mounted against a
-placeholder (the same rule ``mcp.servers.deployment.build_servers`` already applies), so
-a researcher agent calling an unconfigured capability fails with an unreachable server
-rather than a placeholder answer it could mistake for a real one. Only the web research
-server has a backend wired here today, and even that one (``StaticWebBackend``) is a
-fixed-document stand-in, not a real HTTP client - the Postgres, GitHub and sandbox
-backends have no production implementation yet, so this worker only ever registers the
-capabilities it can actually back.
+placeholder (``mcp.servers.configured`` applies that rule), so an agent is never offered
+a capability this deployment cannot back. Each server runs in this process unless
+``RESEARCH_MCP_SERVER_URLS`` names it, in which case it is called over Streamable HTTP
+with a short-lived service token.
 """
 
 from __future__ import annotations
@@ -36,11 +33,9 @@ from research_platform.composition import (
 from research_platform.domain.invocations import ErrorClass
 from research_platform.mcp.catalogue import DEFAULT_CAPABILITIES
 from research_platform.mcp.fastmcp_executor import FastMCPExecutor
-from research_platform.mcp.gateway import ExecutionRequest, UpstreamError
+from research_platform.mcp.gateway import CapabilityExecutor, ExecutionRequest, UpstreamError
 from research_platform.mcp.registry import CapabilityRegistry
-from research_platform.mcp.servers.backends import StaticWebBackend
-from research_platform.mcp.servers.deployment import build_servers
-from research_platform.mcp.servers.web_boundary import DomainPolicy
+from research_platform.mcp.servers.configured import configure_servers
 from research_platform.observability.metrics import configure_metrics
 from research_platform.observability.tracing import configure_tracing
 from research_platform.settings import Settings, load_settings
@@ -85,19 +80,20 @@ def build_research_activities(
     or failed - is written to it as an audit record, which is what makes section 10's
     ``ToolInvocation`` trail durable rather than something only the calling agent saw.
     """
-    servers = build_servers(
-        web_backend=StaticWebBackend(),
-        web_policy=(
-            DomainPolicy(domains=settings.allowed_domains) if settings.allowed_domains else None
-        ),
-        web_requests_per_minute=settings.web_requests_per_minute,
-    )
-
+    configured = configure_servers(settings, evidence_source=jobs if jobs is not None else None)
     registry = CapabilityRegistry(
-        [capability for capability in DEFAULT_CAPABILITIES if capability.server in servers]
+        [
+            capability
+            for capability in DEFAULT_CAPABILITIES
+            if capability.server in configured.targets
+        ]
     )
-    executor = FastMCPExecutor(servers) if servers else UnconfiguredExecutor()
-    if not servers:
+    executor: CapabilityExecutor
+    if configured.targets:
+        executor = FastMCPExecutor(configured.targets, token_provider=configured.token_provider)
+        logger.info("MCP servers available to agents: %s", ", ".join(configured.names))
+    else:
+        executor = UnconfiguredExecutor()
         logger.warning("no MCP backend is configured; agents will have no tools to call")
 
     gateway = build_gateway(

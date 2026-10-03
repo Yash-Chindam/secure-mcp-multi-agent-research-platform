@@ -149,6 +149,7 @@ jobs:
           helm dependency update deploy/helm/research-platform
           helm lint deploy/helm/research-platform
           helm template deploy/helm/research-platform --set-file opa.policyRego=policy/research/authz.rego > /dev/null
+          helm template deploy/helm/research-platform --set-file opa.policyRego=policy/research/authz.rego --set 'mcpServers[0].name=web-research' --set 'mcpServers[1].name=evidence' > /dev/null
 
   auto-merge:
     name: Merge after CI

@@ -20,6 +20,18 @@ settings:
   # recorded but unexecuted.
   workflowsEnabled: true
   webAllowedDomains: ""
+  # Section 8 backends. Each MCP server is built only when its backend and its boundary
+  # are both set; leave a pair empty and that server simply does not exist. Secrets
+  # (RESEARCH_GITHUB_TOKEN, RESEARCH_ANALYTICS_DATABASE_URL, RESEARCH_MCP_CLIENT_SECRET)
+  # belong in existingSecretName, never here.
+  webSearchUrl: ""            # a SearXNG-compatible JSON search endpoint
+  workspaceRoots: ""          # tenant=/absolute/path,tenant2=/absolute/path
+  analyticsTenantSchemas: ""  # tenant=schema,tenant2=schema
+  githubRepositories: ""      # tenant=owner/repo|owner/other,tenant2=owner/repo
+  sandboxImage: ""            # e.g. python:3.12-alpine; needs a container runtime
+  # The OAuth client the worker authenticates to remote MCP servers as. Used with
+  # oidcIssuer/oidcAudience, which the servers verify the token against.
+  mcpClientId: ""
   # The PostgreSQL system of record (section 10). Rendered into a chart-managed Secret
   # rather than the settings ConfigMap, because it carries a password. Leave this empty
   # and supply RESEARCH_DATABASE_URL through existingSecretName to keep the credential
@@ -52,13 +64,15 @@ worker:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: 1000m, memory: 1Gi }
 
-# The MCP plane. Every section 8 server runs in-process inside api/worker today (see
-# worker.py's docstring) rather than as its own deployment, so this list is empty by
-# default; the networkPolicies.mcp policy below still exists so a server given a
-# `plane: mcp` label later is already governed by it.
+# The MCP plane (section 15's independently scalable FastMCP services). Each server
+# listed here runs as its own Deployment over Streamable HTTP and the worker calls it
+# with a short-lived service token; a server not listed runs in process inside the
+# worker instead. Names: web-research, filesystem, postgres, github, python-analysis,
+# evidence. A listed server must have its backend configured above or it exits at start.
 mcpServers: []
 # - name: web-research
 #   port: 8000
+#   replicaCount: 2
 #   resources:
 #     requests: { cpu: 100m, memory: 128Mi }
 #     limits: { cpu: 250m, memory: 256Mi }

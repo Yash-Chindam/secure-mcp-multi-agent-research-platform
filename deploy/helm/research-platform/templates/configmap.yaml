@@ -13,3 +13,14 @@ data:
   RESEARCH_TEMPORAL_NAMESPACE: {{ .Values.settings.temporalNamespace | quote }}
   RESEARCH_WEB_ALLOWED_DOMAINS: {{ .Values.settings.webAllowedDomains | quote }}
   RESEARCH_OTEL_EXPORTER_OTLP_ENDPOINT: {{ tpl .Values.settings.otelExporterOtlpEndpoint . | quote }}
+  RESEARCH_WEB_SEARCH_URL: {{ .Values.settings.webSearchUrl | quote }}
+  RESEARCH_WORKSPACE_ROOTS: {{ .Values.settings.workspaceRoots | quote }}
+  RESEARCH_ANALYTICS_TENANT_SCHEMAS: {{ .Values.settings.analyticsTenantSchemas | quote }}
+  RESEARCH_GITHUB_REPOSITORIES: {{ .Values.settings.githubRepositories | quote }}
+  RESEARCH_SANDBOX_IMAGE: {{ .Values.settings.sandboxImage | quote }}
+  RESEARCH_MCP_CLIENT_ID: {{ .Values.settings.mcpClientId | quote }}
+  {{- $urls := list }}
+  {{- range .Values.mcpServers }}
+  {{- $urls = append $urls (printf "%s=http://%s-mcp-%s:%v/mcp" .name (include "research-platform.fullname" $) .name (.port | default 8000)) }}
+  {{- end }}
+  RESEARCH_MCP_SERVER_URLS: {{ join "," $urls | quote }}

@@ -7,7 +7,7 @@ rather than inferred from a silent fallback.
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +45,49 @@ class Settings(BaseSettings):
         description="Comma-separated domains the web research server may fetch.",
     )
     web_requests_per_minute: int = Field(default=30, ge=1, le=10_000)
+    web_search_url: str | None = Field(
+        default=None,
+        description="A SearXNG-compatible JSON search endpoint; unset refuses web search.",
+    )
+    workspace_roots: str = Field(
+        default="",
+        description="Per-tenant filesystem roots, as tenant=/absolute/path pairs.",
+    )
+    analytics_database_url: str | None = Field(
+        default=None,
+        description="The analytical PostgreSQL the SQL server reads; connect as a read-only role.",
+    )
+    analytics_tenant_schemas: str = Field(
+        default="",
+        description="The one schema each tenant may query, as tenant=schema pairs.",
+    )
+    github_token: SecretStr | None = Field(
+        default=None,
+        description="A read-only token scoped to the allowlisted repositories.",
+    )
+    github_api_url: str = Field(default="https://api.github.com")
+    github_repositories: str = Field(
+        default="",
+        description="Per-tenant repository allowlists, as tenant=owner/a|owner/b pairs.",
+    )
+    sandbox_image: str | None = Field(
+        default=None,
+        description="Container image calculations run in; unset disables the sandbox.",
+    )
+    mcp_server_urls: str = Field(
+        default="",
+        description="MCP servers reached over Streamable HTTP instead of in process, as "
+        "server=url pairs.",
+    )
+    mcp_client_id: str | None = Field(
+        default=None,
+        description="The OAuth client the gateway authenticates to remote MCP servers as.",
+    )
+    mcp_client_secret: SecretStr | None = Field(default=None)
+    oidc_token_url: str | None = Field(
+        default=None,
+        description="Where service tokens are issued; derived from the issuer when unset.",
+    )
     otel_exporter_otlp_endpoint: str | None = Field(
         default=None,
         description="Where to export traces and metrics; unset records them without "
@@ -83,6 +126,36 @@ class Settings(BaseSettings):
         return f"{self.oidc_issuer.rstrip('/')}/protocol/openid-connect/certs"
 
     @property
+    def token_url(self) -> str:
+        """Where to request service tokens, following the Keycloak realm convention."""
+        if self.oidc_token_url:
+            return self.oidc_token_url
+        if not self.oidc_issuer:
+            raise ValueError("a token issuer must be configured before tokens can be issued")
+        return f"{self.oidc_issuer.rstrip('/')}/protocol/openid-connect/token"
+
+    @property
+    def tenant_workspace_roots(self) -> dict[str, str]:
+        return parse_pairs(self.workspace_roots, setting="workspace_roots")
+
+    @property
+    def tenant_schemas(self) -> dict[str, str]:
+        return parse_pairs(self.analytics_tenant_schemas, setting="analytics_tenant_schemas")
+
+    @property
+    def tenant_repositories(self) -> dict[str, frozenset[str]]:
+        return {
+            tenant: frozenset(entry.strip() for entry in entries.split("|") if entry.strip())
+            for tenant, entries in parse_pairs(
+                self.github_repositories, setting="github_repositories"
+            ).items()
+        }
+
+    @property
+    def remote_mcp_servers(self) -> dict[str, str]:
+        return parse_pairs(self.mcp_server_urls, setting="mcp_server_urls")
+
+    @property
     def state_is_durable(self) -> bool:
         return bool(self.database_url)
 
@@ -97,6 +170,25 @@ class Settings(BaseSettings):
             for domain in self.web_allowed_domains.split(",")
             if domain.strip()
         )
+
+
+def parse_pairs(raw: str, *, setting: str) -> dict[str, str]:
+    """Parse ``key=value,key=value``, refusing an entry that is not exactly that.
+
+    A malformed boundary setting is a startup error rather than a silently dropped entry:
+    a tenant whose allowlist failed to parse must not quietly end up with a different one.
+    """
+    pairs: dict[str, str] = {}
+    for entry in raw.split(","):
+        if not entry.strip():
+            continue
+        key, separator, value = entry.partition("=")
+        if not separator or not key.strip() or not value.strip():
+            raise ValueError(f"{setting} entry {entry!r} is not a key=value pair")
+        if key.strip() in pairs:
+            raise ValueError(f"{setting} names {key.strip()!r} more than once")
+        pairs[key.strip()] = value.strip()
+    return pairs
 
 
 def load_settings() -> Settings:
