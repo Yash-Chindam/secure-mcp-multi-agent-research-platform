@@ -31,6 +31,7 @@ x-app-environment: &app-environment
   RESEARCH_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
   RESEARCH_OPA_URL: http://opa:8181
   RESEARCH_TEMPORAL_TARGET_HOST: temporal:7233
+  RESEARCH_WORKFLOWS_ENABLED: "true"
   RESEARCH_DATABASE_URL: postgresql://research:research@postgres:5432/research_platform
   RESEARCH_WEB_ALLOWED_DOMAINS: ""
 

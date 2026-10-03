@@ -1,5 +1,5 @@
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from crewai.lite_agent_output import LiteAgentOutput
@@ -18,6 +18,7 @@ from research_platform.application.jobs import InMemoryJobRepository, ResearchJo
 from research_platform.domain.models import (
     CriticVerdict,
     EvidenceRecord,
+    EvidenceRecordCreate,
     JobStatus,
     ResearchBudget,
     ResearchJob,
@@ -329,3 +330,41 @@ async def test_transition_job_still_rejects_a_genuinely_invalid_transition() -> 
 
     with pytest.raises(Exception, match="cannot transition"):
         await env.run(activities.transition, TENANT, job.id, JobStatus.COMPLETED)
+
+
+def evidence_command(excerpt_hash: str = "0") -> EvidenceRecordCreate:
+    return EvidenceRecordCreate(
+        excerpt="Vendor pricing is 20 USD per seat.",
+        source_uri="https://vendor.test/pricing",
+        content_hash=f"sha256:{excerpt_hash * 64}",
+        producing_task_id=UUID(int=1),
+        tool_invocation_id=UUID(int=2),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_redelivered_evidence_write_does_not_store_the_record_twice() -> None:
+    """Section 12: a restarted worker must not duplicate a completed side effect."""
+    service = ResearchJobService(InMemoryJobRepository())
+    job = service.create(TENANT, "requester-1", ResearchJobCreate(question="What does it cost?"))
+    activities = JobActivities(jobs=service)
+    env = ActivityEnvironment()
+
+    first = await env.run(activities.add_evidence, TENANT, job.id, evidence_command())
+    redelivered = await env.run(activities.add_evidence, TENANT, job.id, evidence_command())
+
+    assert redelivered.id == first.id
+    assert len(service.list_evidence(TENANT, job.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_different_content_from_the_same_source_is_still_stored_separately() -> None:
+    service = ResearchJobService(InMemoryJobRepository())
+    job = service.create(TENANT, "requester-1", ResearchJobCreate(question="What does it cost?"))
+    activities = JobActivities(jobs=service)
+    env = ActivityEnvironment()
+
+    await env.run(activities.add_evidence, TENANT, job.id, evidence_command("0"))
+    await env.run(activities.add_evidence, TENANT, job.id, evidence_command("1"))
+
+    assert len(service.list_evidence(TENANT, job.id)) == 2

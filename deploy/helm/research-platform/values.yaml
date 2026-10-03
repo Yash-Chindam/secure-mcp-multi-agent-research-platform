@@ -16,6 +16,9 @@ settings:
   opaUrl: "http://{{ .Release.Name }}-opa:8181"
   temporalTargetHost: "{{ .Release.Name }}-temporal-frontend:7233"
   temporalNamespace: "default"
+  # Start a durable workflow for every job the API creates. Off leaves a created job
+  # recorded but unexecuted.
+  workflowsEnabled: true
   webAllowedDomains: ""
   # The PostgreSQL system of record (section 10). Rendered into a chart-managed Secret
   # rather than the settings ConfigMap, because it carries a password. Leave this empty

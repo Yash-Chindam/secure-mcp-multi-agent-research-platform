@@ -9,6 +9,7 @@ data:
   RESEARCH_OIDC_AUDIENCE: {{ .Values.settings.oidcAudience | quote }}
   RESEARCH_OPA_URL: {{ tpl .Values.settings.opaUrl . | quote }}
   RESEARCH_TEMPORAL_TARGET_HOST: {{ tpl .Values.settings.temporalTargetHost . | quote }}
+  RESEARCH_WORKFLOWS_ENABLED: {{ .Values.settings.workflowsEnabled | quote }}
   RESEARCH_TEMPORAL_NAMESPACE: {{ .Values.settings.temporalNamespace | quote }}
   RESEARCH_WEB_ALLOWED_DOMAINS: {{ .Values.settings.webAllowedDomains | quote }}
   RESEARCH_OTEL_EXPORTER_OTLP_ENDPOINT: {{ tpl .Values.settings.otelExporterOtlpEndpoint . | quote }}
