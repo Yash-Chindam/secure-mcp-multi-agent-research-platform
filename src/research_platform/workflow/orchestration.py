@@ -53,7 +53,9 @@ class JobsPort(Protocol):
     with ``application.jobs.AsyncJobs`` rather than made to satisfy this directly.
     """
 
-    async def transition(self, tenant_id: str, job_id: UUID, target: JobStatus) -> ResearchJob: ...
+    async def transition(
+        self, tenant_id: str, job_id: UUID, target: JobStatus, detail: str | None = None
+    ) -> ResearchJob: ...
 
     async def add_evidence(
         self, tenant_id: str, job_id: UUID, command: EvidenceRecordCreate
@@ -103,6 +105,7 @@ class ResearchOutcome:
     job: ResearchJob
     report: ResearchReport | None
     evidence: list[EvidenceRecord]
+    failure: str | None = None
 
 
 def _task_from(planned: PlannedTask, *, job: ResearchJob) -> ResearchTask:
@@ -136,9 +139,37 @@ async def run_research_job(
     metrics.active_jobs.add(1, {"tenant.id": job.tenant_id})
     try:
         return await _run_research_job(job, jobs=jobs, activities=activities, metrics=metrics)
+    except Exception as error:
+        return await _fail(job, jobs, error)
     finally:
         metrics.active_jobs.add(-1, {"tenant.id": job.tenant_id})
         span.end()
+
+
+def _describe(error: BaseException) -> str:
+    """Name what went wrong without the wrapper an activity failure arrives in."""
+    cause = getattr(error, "cause", None) or error
+    # A failure that crossed an activity boundary keeps its original class name in
+    # ``type``; the exception object itself is the transport's generic wrapper.
+    name = getattr(cause, "type", None) or type(cause).__name__
+    return f"{name}: {cause}"
+
+
+async def _fail(job: ResearchJob, jobs: JobsPort, error: Exception) -> ResearchOutcome:
+    """End the job as failed, with the reason, when a step could not be completed.
+
+    A step fails here only after its own bounded retries are spent - schema correction
+    inside the activity, then the activity's retry policy - so this is not a place to
+    try again. What matters is that the job does not stay in a working status forever
+    with nothing working on it: it is marked failed and says why. If even that cannot
+    be recorded, the original error is raised so the failure is not hidden.
+    """
+    reason = _describe(error)
+    try:
+        failed = await jobs.transition(job.tenant_id, job.id, JobStatus.FAILED, reason)
+    except Exception:
+        raise error from None
+    return ResearchOutcome(job=failed, report=None, evidence=[], failure=reason)
 
 
 async def _run_research_job(
@@ -165,7 +196,9 @@ async def _run_research_job(
     )
 
     if not evidence:
-        job = await jobs.transition(job.tenant_id, job.id, JobStatus.PARTIAL)
+        job = await jobs.transition(
+            job.tenant_id, job.id, JobStatus.PARTIAL, "no evidence could be collected"
+        )
         return ResearchOutcome(job=job, report=None, evidence=evidence)
 
     critique: CriticReview
@@ -188,13 +221,20 @@ async def _run_research_job(
         if decision is ReviewerDecision.APPROVE:
             break
         if decision is ReviewerDecision.REJECT:
-            job = await jobs.transition(job.tenant_id, job.id, JobStatus.FAILED)
+            job = await jobs.transition(
+                job.tenant_id, job.id, JobStatus.FAILED, "rejected by the reviewer"
+            )
             return ResearchOutcome(job=job, report=None, evidence=evidence)
 
         review_cycle += 1
         job = await jobs.transition(job.tenant_id, job.id, JobStatus.RESEARCHING)
         if review_cycle > MAX_REVIEW_CYCLES:
-            job = await jobs.transition(job.tenant_id, job.id, JobStatus.PARTIAL)
+            job = await jobs.transition(
+                job.tenant_id,
+                job.id,
+                JobStatus.PARTIAL,
+                f"the reviewer asked for more research more than {MAX_REVIEW_CYCLES} times",
+            )
             return ResearchOutcome(job=job, report=None, evidence=evidence)
 
         more_evidence, unmet = await _collect_evidence(
@@ -210,8 +250,22 @@ async def _run_research_job(
     if missing_citations:
         metrics.unsupported_citations.add(len(missing_citations), {"tenant.id": job.tenant_id})
 
-    final_status = JobStatus.PARTIAL if (report.is_partial or unmet) else JobStatus.COMPLETED
-    job = await jobs.transition(job.tenant_id, job.id, final_status)
+    # The report activity already refuses a citation to evidence that was never
+    # recorded. It is checked again here because this is the last point before a job is
+    # called complete, and "every published claim is linked to evidence" (section 14)
+    # should not depend on a single check having run.
+    shortfalls = [
+        *(f"unmet requirement: {requirement}" for requirement in unmet),
+        *(f"omitted: {reason}" for reason in report.omitted_because),
+        *(
+            f"cites unrecorded evidence {identifier}"
+            for identifier in sorted(missing_citations, key=str)
+        ),
+    ]
+    if shortfalls:
+        job = await jobs.transition(job.tenant_id, job.id, JobStatus.PARTIAL, "; ".join(shortfalls))
+    else:
+        job = await jobs.transition(job.tenant_id, job.id, JobStatus.COMPLETED)
     return ResearchOutcome(job=job, report=report, evidence=evidence)
 
 

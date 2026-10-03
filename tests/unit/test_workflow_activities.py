@@ -1,9 +1,12 @@
 import json
+from collections.abc import Callable
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from crewai.lite_agent_output import LiteAgentOutput
 from crewai.tools import BaseTool
+from support.scripted import ScriptedResearcher
 from temporalio.testing import ActivityEnvironment
 
 from research_platform.agents.contracts import (
@@ -14,6 +17,8 @@ from research_platform.agents.contracts import (
     ResearchPlan,
     ResearchReport,
 )
+from research_platform.agents.provenance import hash_content
+from research_platform.agents.validation import SchemaCorrectionExhausted
 from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
 from research_platform.domain.models import (
     CriticVerdict,
@@ -43,20 +48,6 @@ VALID_PLAN = json.dumps(
             }
         ],
         "rationale": "Pricing must be sourced before it can be compared.",
-    }
-)
-
-VALID_SUBMISSION = json.dumps(
-    {
-        "records": [
-            {
-                "excerpt": "Vendor pricing is 20 USD per seat.",
-                "source_uri": "https://vendor.test/pricing",
-                "content_hash": f"sha256:{'0' * 64}",
-                "producing_task_id": str(uuid4()),
-                "tool_invocation_id": str(uuid4()),
-            }
-        ]
     }
 )
 
@@ -143,12 +134,8 @@ async def test_plan_describes_the_available_capabilities_in_the_prompt() -> None
     assert "web-research.search" in agent.messages[0]
 
 
-@pytest.mark.asyncio
-async def test_research_gives_the_researcher_only_researcher_tools() -> None:
-    activities, captured = build_activities(VALID_SUBMISSION)
-    env = ActivityEnvironment()
-    job = new_job()
-    task = ResearchTask(
+def research_task(job: ResearchJob) -> ResearchTask:
+    return ResearchTask(
         job_id=job.id,
         tenant_id=job.tenant_id,
         objective="Collect the vendor pricing page",
@@ -156,13 +143,82 @@ async def test_research_gives_the_researcher_only_researcher_tools() -> None:
         evidence_requirements=["a dated pricing page"],
     )
 
-    submission = await env.run(activities.research, job, task)
+
+def researching(
+    build_agent: Callable[[AgentRole, list[BaseTool]], Any],
+) -> ResearchActivities:
+    registry = default_registry()
+    return ResearchActivities(
+        gateway=CapabilityGateway(registry=registry, executor=StubExecutor()),
+        registry=registry,
+        build_agent=build_agent,
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_gives_the_researcher_only_researcher_tools() -> None:
+    captured: list[ScriptedResearcher] = []
+
+    def build_agent(_role: AgentRole, tools: list[BaseTool]) -> ScriptedResearcher:
+        captured.append(ScriptedResearcher(tools))
+        return captured[-1]
+
+    job = new_job()
+
+    submission = await ActivityEnvironment().run(
+        researching(build_agent).research, job, research_task(job)
+    )
 
     assert isinstance(submission, EvidenceSubmission)
-    (agent,) = captured
-    tool_names = {tool.name for tool in agent.tools}
+    tool_names = {tool.name for tool in captured[0].tools}
     assert "web_research_search" in tool_names
     assert "postgres_run_analytical_query" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_research_establishes_each_records_provenance_from_the_tool_call() -> None:
+    job = new_job()
+    task = research_task(job)
+
+    submission = await ActivityEnvironment().run(
+        researching(lambda _role, tools: ScriptedResearcher(tools)).research, job, task
+    )
+
+    [record] = submission.records
+    assert str(record.source_uri) == "https://vendor.test/pricing"
+    assert record.content_hash == hash_content("Vendor pricing is 20 USD per seat.")
+    assert record.producing_task_id == task.id
+    assert record.trust_level is TrustLevel.PRIMARY
+
+
+@pytest.mark.asyncio
+async def test_research_refuses_an_excerpt_no_tool_returned() -> None:
+    job = new_job()
+    fabricating = researching(
+        lambda _role, tools: ScriptedResearcher(tools, excerpt="Pricing is 5 USD per seat.")
+    )
+
+    with pytest.raises(SchemaCorrectionExhausted, match="does not appear in the output"):
+        await ActivityEnvironment().run(fabricating.research, job, research_task(job))
+
+
+@pytest.mark.asyncio
+async def test_research_refuses_evidence_attributed_to_a_tool_call_that_never_happened() -> None:
+    job = new_job()
+    invented = json.dumps(
+        {
+            "claims": [
+                {
+                    "excerpt": "Vendor pricing is 20 USD per seat.",
+                    "tool_invocation_id": str(uuid4()),
+                }
+            ]
+        }
+    )
+    activities, _captured = build_activities(invented)
+
+    with pytest.raises(SchemaCorrectionExhausted, match="not a tool call this task made"):
+        await ActivityEnvironment().run(activities.research, job, research_task(job))
 
 
 @pytest.mark.asyncio
@@ -240,7 +296,16 @@ async def test_critique_lists_the_proposed_findings_in_the_prompt() -> None:
 @pytest.mark.asyncio
 async def test_report_names_the_critic_supported_claims_in_the_prompt() -> None:
     job = new_job()
-    citation = uuid4()
+    recorded = EvidenceRecord(
+        job_id=job.id,
+        tenant_id=job.tenant_id,
+        excerpt="Vendor pricing is 20 USD per seat.",
+        source_uri="https://vendor.test/pricing",
+        content_hash=f"sha256:{'0' * 64}",
+        producing_task_id=uuid4(),
+        tool_invocation_id=uuid4(),
+    )
+    citation = recorded.id
     critique = CriticReview(
         verdicts=[
             ClaimVerdict(
@@ -264,7 +329,7 @@ async def test_report_names_the_critic_supported_claims_in_the_prompt() -> None:
     activities, captured = build_activities(report_response)
     env = ActivityEnvironment()
 
-    report = await env.run(activities.report, job, critique, [])
+    report = await env.run(activities.report, job, critique, [recorded])
 
     assert isinstance(report, ResearchReport)
     (agent,) = captured

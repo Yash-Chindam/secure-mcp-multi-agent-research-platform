@@ -3,8 +3,9 @@ import json
 import pytest
 from crewai.lite_agent_output import LiteAgentOutput
 
-from research_platform.agents.contracts import EvidenceSubmission, ResearchPlan
+from research_platform.agents.contracts import ResearchPlan
 from research_platform.agents.crew import AGENT_SPECS, build_agent, request_agent_output
+from research_platform.agents.provenance import EvidenceClaims
 from research_platform.agents.validation import SchemaCorrectionExhausted
 from research_platform.domain.tasks import AgentRole
 
@@ -56,7 +57,7 @@ class FakeAgent:
 
 def test_every_role_has_a_spec_naming_its_contract() -> None:
     assert set(AGENT_SPECS) == set(AgentRole)
-    assert AGENT_SPECS[AgentRole.RESEARCHER].contract is EvidenceSubmission
+    assert AGENT_SPECS[AgentRole.RESEARCHER].contract is EvidenceClaims
     assert AGENT_SPECS[AgentRole.PLANNER].contract is ResearchPlan
 
 

@@ -10,116 +10,45 @@ decision, and that the whole thing round-trips through Temporal's data converter
 
 import asyncio
 import json
-from collections.abc import Callable
-from uuid import uuid4
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import pytest
-from crewai.lite_agent_output import LiteAgentOutput
 from crewai.tools import BaseTool
+from support.scripted import (
+    SOURCE_TEXT,
+    ScriptedAgent,
+    ScriptedResearcher,
+    StubExecutor,
+    honest_crew,
+)
 from temporalio import activity
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from research_platform.agents.contracts import AnalysisResult
+from research_platform.agents.provenance import hash_content
 from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
-from research_platform.domain.models import EvidenceRecord, JobStatus, ResearchBudget, ResearchJob
+from research_platform.domain.models import (
+    EvidenceRecord,
+    JobStatus,
+    ResearchBudget,
+    ResearchJob,
+    TrustLevel,
+)
 from research_platform.domain.tasks import AgentRole
 from research_platform.mcp.catalogue import default_registry
-from research_platform.mcp.gateway import CapabilityGateway, ExecutionRequest
+from research_platform.mcp.gateway import CapabilityGateway
 from research_platform.workflow.activities import JobActivities, ResearchActivities
 from research_platform.workflow.orchestration import ReviewerDecision
-from research_platform.workflow.research_workflow import ResearchJobWorkflow
+from research_platform.workflow.research_workflow import TASK_QUEUE, ResearchJobWorkflow
+
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 TENANT = "acme"
 
-VALID_PLAN = json.dumps(
-    {
-        "tasks": [
-            {
-                "objective": "Collect the vendor pricing page",
-                "assigned_agent": AgentRole.RESEARCHER.value,
-                "evidence_requirements": ["a dated pricing page"],
-            }
-        ],
-        "rationale": "Pricing must be sourced before it can be compared.",
-    }
-)
-
-
-def submission_for(*_args: object) -> str:
-    return json.dumps(
-        {
-            "records": [
-                {
-                    "excerpt": "Vendor pricing is 20 USD per seat.",
-                    "source_uri": "https://vendor.test/pricing",
-                    "content_hash": f"sha256:{'0' * 64}",
-                    "producing_task_id": str(uuid4()),
-                    "tool_invocation_id": str(uuid4()),
-                }
-            ]
-        }
-    )
-
-
-def analysis_response(evidence_id: str) -> str:
-    return json.dumps(
-        {
-            "findings": [
-                {
-                    "claim": "The vendor charges 20 USD per seat.",
-                    "supporting_evidence_ids": [evidence_id],
-                    "confidence": 0.9,
-                }
-            ]
-        }
-    )
-
-
-def review_response(*, requires_reviewer: bool) -> str:
-    return json.dumps(
-        {
-            "verdicts": [
-                {
-                    "claim": "The vendor charges 20 USD per seat.",
-                    "verdict": "supported",
-                    "reasoning": "Matches the source.",
-                }
-            ],
-            "coverage_gaps": ["enterprise pricing was not sourced"] if requires_reviewer else [],
-        }
-    )
-
-
-def report_response(evidence_id: str) -> str:
-    return json.dumps(
-        {
-            "title": "Vendor pricing",
-            "sections": [
-                {
-                    "heading": "Pricing",
-                    "body": f"The vendor charges 20 USD per seat [{evidence_id}].",
-                }
-            ],
-        }
-    )
-
-
-class StubExecutor:
-    def execute(self, request: ExecutionRequest) -> str:
-        return "Vendor pricing is 20 USD per seat."
-
-
-class ScriptedAgent:
-    """Returns whatever ``respond`` computes for the message it was given."""
-
-    def __init__(self, respond: Callable[[str], str]) -> None:
-        self._respond = respond
-        self.tools: list[BaseTool] = []
-
-    def kickoff(self, message: str) -> LiteAgentOutput:
-        return LiteAgentOutput(raw=self._respond(message), agent_role="agent")
+AgentFactory = Callable[[AgentRole, list[BaseTool]], ScriptedAgent]
 
 
 def new_job() -> ResearchJob:
@@ -132,84 +61,127 @@ def new_job() -> ResearchJob:
 
 
 def build_activities(
-    *, job: ResearchJob, evidence_id_holder: list[str], requires_reviewer: bool
+    job: ResearchJob, build_agent: AgentFactory
 ) -> tuple[ResearchActivities, JobActivities, ResearchJobService]:
-    gateway = CapabilityGateway(registry=default_registry(), executor=StubExecutor())
     repository = InMemoryJobRepository()
     repository.add(job)
     jobs = ResearchJobService(repository)
-
-    def build_agent(role: AgentRole, _tools: list[BaseTool]) -> ScriptedAgent:
-        if role is AgentRole.PLANNER:
-            return ScriptedAgent(lambda _msg: VALID_PLAN)
-        if role is AgentRole.RESEARCHER:
-            return ScriptedAgent(submission_for)
-        if role is AgentRole.ANALYST:
-            return ScriptedAgent(lambda _msg: analysis_response(evidence_id_holder[0]))
-        if role is AgentRole.CRITIC:
-            return ScriptedAgent(lambda _msg: review_response(requires_reviewer=requires_reviewer))
-        return ScriptedAgent(lambda _msg: report_response(evidence_id_holder[0]))
-
-    research_activities = ResearchActivities(
-        gateway=gateway, registry=default_registry(), build_agent=build_agent
+    registry = default_registry()
+    research = ResearchActivities(
+        gateway=CapabilityGateway(
+            registry=registry, executor=StubExecutor(), audit=jobs.record_invocation
+        ),
+        registry=registry,
+        build_agent=build_agent,
     )
-    job_activities = JobActivities(jobs=jobs)
-    return research_activities, job_activities, jobs
+    return research, JobActivities(jobs=jobs), jobs
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_the_workflow_completes_the_happy_path_through_real_activities() -> None:
-    job = new_job()
-    evidence_id_holder: list[str] = []
-    research_activities, job_activities, jobs = build_activities(
-        job=job, evidence_id_holder=evidence_id_holder, requires_reviewer=False
-    )
+def registered(
+    research: ResearchActivities, persistence: JobActivities, **replaced: Any
+) -> Sequence[Callable[..., Any]]:
+    """Every activity the workflow calls, with any named one swapped for a substitute."""
+    activities = {
+        "plan": research.plan,
+        "research": research.research,
+        "analyze": research.analyze,
+        "critique": research.critique,
+        "report": research.report,
+        "transition": persistence.transition,
+        "add_evidence": persistence.add_evidence,
+    }
+    return list((activities | replaced).values())
 
+
+async def run_to_completion(job: ResearchJob, activities: Sequence[Callable[..., Any]]) -> Any:
     async with (
         await WorkflowEnvironment.start_time_skipping(
             data_converter=pydantic_data_converter
         ) as env,
         Worker(
             env.client,
-            task_queue="research-jobs",
+            task_queue=TASK_QUEUE,
             workflows=[ResearchJobWorkflow],
-            activities=[
-                research_activities.plan,
-                research_activities.research,
-                research_activities.analyze,
-                research_activities.critique,
-                research_activities.report,
-                job_activities.transition,
-                job_activities.add_evidence,
-            ],
+            activities=activities,
         ),
     ):
-        # The analyst's evidence identifier is only known once the researcher runs,
-        # so it cannot be baked into the plan up front; the earliest a real deployment
-        # ever forges an id is with the record's own row, and every test agent here
-        # only ever needs one, so seed it before the workflow starts.
-        evidence_id_holder.append(str(uuid4()))
-        outcome = await env.client.execute_workflow(
-            ResearchJobWorkflow.run,
-            job,
-            id=f"research-job-{job.id}",
-            task_queue="research-jobs",
+        return await env.client.execute_workflow(
+            ResearchJobWorkflow.run, job, id=f"research-job-{job.id}", task_queue=TASK_QUEUE
         )
+
+
+async def test_the_workflow_completes_the_happy_path_through_real_activities() -> None:
+    job = new_job()
+    research, persistence, jobs = build_activities(job, honest_crew())
+
+    outcome = await run_to_completion(job, registered(research, persistence))
 
     assert outcome.job.status is JobStatus.COMPLETED
     assert outcome.report is not None
     assert len(jobs.list_evidence(TENANT, job.id)) == 1
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+async def test_recorded_evidence_carries_provenance_the_platform_established_itself() -> None:
+    """Source, hash, classification and producing call all come from the tool call."""
+    job = new_job()
+    research, persistence, jobs = build_activities(job, honest_crew())
+
+    await run_to_completion(job, registered(research, persistence))
+
+    [evidence] = jobs.list_evidence(TENANT, job.id)
+    [call] = jobs.list_invocations(TENANT, job.id)
+    assert evidence.tool_invocation_id == call.id
+    assert evidence.producing_task_id == call.task_id
+    assert str(evidence.source_uri) == "https://vendor.test/pricing"
+    assert evidence.content_hash == hash_content(SOURCE_TEXT)
+    assert evidence.trust_level is TrustLevel.PRIMARY
+
+
+async def test_a_researcher_that_quotes_what_no_tool_returned_collects_no_evidence() -> None:
+    """The fabricated excerpt is refused, so the job ends partial rather than citing it."""
+
+    def fabricating_crew(role: AgentRole, tools: list[BaseTool]) -> ScriptedAgent:
+        if role is AgentRole.RESEARCHER:
+            return ScriptedResearcher(tools, excerpt="Vendor pricing is 5 USD per seat.")
+        return honest_crew()(role, tools)
+
+    job = new_job()
+    research, persistence, jobs = build_activities(job, fabricating_crew)
+
+    outcome = await run_to_completion(job, registered(research, persistence))
+
+    assert outcome.job.status is JobStatus.PARTIAL
+    assert outcome.job.status_detail == "no evidence could be collected"
+    assert outcome.report is None
+    assert jobs.list_evidence(TENANT, job.id) == []
+
+
+async def test_a_report_citing_evidence_that_does_not_exist_fails_the_job_with_a_reason() -> None:
+    def crew_with_an_inventive_reporter(role: AgentRole, tools: list[BaseTool]) -> ScriptedAgent:
+        if role is AgentRole.REPORTER:
+            invented = "11111111-2222-3333-4444-555555555555"
+            body = f"The vendor charges 20 USD per seat [{invented}]."
+            return ScriptedAgent(
+                lambda _message: json.dumps(
+                    {"title": "Vendor pricing", "sections": [{"heading": "Pricing", "body": body}]}
+                )
+            )
+        return honest_crew()(role, tools)
+
+    job = new_job()
+    research, persistence, jobs = build_activities(job, crew_with_an_inventive_reporter)
+
+    outcome = await run_to_completion(job, registered(research, persistence))
+
+    assert outcome.job.status is JobStatus.FAILED
+    assert outcome.report is None
+    assert "never recorded" in (outcome.failure or "")
+    assert jobs.get(TENANT, job.id).status_detail == outcome.failure
+
+
 async def test_a_reviewer_signal_lets_a_flagged_job_proceed() -> None:
     job = new_job()
-    evidence_id_holder: list[str] = [str(uuid4())]
-    research_activities, job_activities, jobs = build_activities(
-        job=job, evidence_id_holder=evidence_id_holder, requires_reviewer=True
-    )
+    research, persistence, jobs = build_activities(job, honest_crew(requires_reviewer=True))
 
     async with (
         await WorkflowEnvironment.start_time_skipping(
@@ -217,24 +189,13 @@ async def test_a_reviewer_signal_lets_a_flagged_job_proceed() -> None:
         ) as env,
         Worker(
             env.client,
-            task_queue="research-jobs",
+            task_queue=TASK_QUEUE,
             workflows=[ResearchJobWorkflow],
-            activities=[
-                research_activities.plan,
-                research_activities.research,
-                research_activities.analyze,
-                research_activities.critique,
-                research_activities.report,
-                job_activities.transition,
-                job_activities.add_evidence,
-            ],
+            activities=registered(research, persistence),
         ),
     ):
         handle = await env.client.start_workflow(
-            ResearchJobWorkflow.run,
-            job,
-            id=f"research-job-{job.id}",
-            task_queue="research-jobs",
+            ResearchJobWorkflow.run, job, id=f"research-job-{job.id}", task_queue=TASK_QUEUE
         )
 
         for _ in range(200):
@@ -251,8 +212,6 @@ async def test_a_reviewer_signal_lets_a_flagged_job_proceed() -> None:
     assert outcome.report is not None
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
 async def test_a_transient_activity_failure_recovers_via_temporals_own_retry() -> None:
     """Section 14's "recovery after controlled failures", proven end to end.
 
@@ -261,10 +220,7 @@ async def test_a_transient_activity_failure_recovers_via_temporals_own_retry() -
     of this platform's own involved - Temporal's own mechanism recovers it.
     """
     job = new_job()
-    evidence_id_holder: list[str] = []
-    research_activities, job_activities, jobs = build_activities(
-        job=job, evidence_id_holder=evidence_id_holder, requires_reviewer=False
-    )
+    research, persistence, _jobs = build_activities(job, honest_crew())
     attempts: list[int] = []
 
     @activity.defn(name="analyze_evidence")
@@ -272,35 +228,34 @@ async def test_a_transient_activity_failure_recovers_via_temporals_own_retry() -
         attempts.append(len(attempts) + 1)
         if len(attempts) == 1:
             raise RuntimeError("simulated transient failure")
-        return await research_activities.analyze(job, evidence)
+        return await research.analyze(job, evidence)
 
-    async with (
-        await WorkflowEnvironment.start_time_skipping(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="research-jobs",
-            workflows=[ResearchJobWorkflow],
-            activities=[
-                research_activities.plan,
-                research_activities.research,
-                flaky_analyze,
-                research_activities.critique,
-                research_activities.report,
-                job_activities.transition,
-                job_activities.add_evidence,
-            ],
-        ),
-    ):
-        evidence_id_holder.append(str(uuid4()))
-        outcome = await env.client.execute_workflow(
-            ResearchJobWorkflow.run,
-            job,
-            id=f"research-job-{job.id}",
-            task_queue="research-jobs",
-        )
+    outcome = await run_to_completion(job, registered(research, persistence, analyze=flaky_analyze))
 
     assert outcome.job.status is JobStatus.COMPLETED
     assert outcome.report is not None
     assert len(attempts) == 2
+
+
+async def test_an_output_the_agent_cannot_correct_is_not_retried_by_temporal() -> None:
+    """A refusal is deterministic; re-running the same model calls would change nothing."""
+    calls: list[str] = []
+
+    def stubborn_crew(role: AgentRole, tools: list[BaseTool]) -> ScriptedAgent:
+        if role is AgentRole.PLANNER:
+
+            def respond(_message: str) -> str:
+                calls.append("plan")
+                return "not json"
+
+            return ScriptedAgent(respond)
+        return honest_crew()(role, tools)
+
+    job = new_job()
+    research, persistence, _jobs = build_activities(job, stubborn_crew)
+
+    outcome = await run_to_completion(job, registered(research, persistence))
+
+    assert outcome.job.status is JobStatus.FAILED
+    assert "SchemaCorrectionExhausted" in (outcome.failure or "")
+    assert len(calls) == 3  # one activity attempt, three bounded corrections

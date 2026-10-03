@@ -47,10 +47,14 @@ AGENT_ACTIVITY_TIMEOUT = timedelta(minutes=10)
 """How long one agent call - including its own bounded schema-correction retries - may
 run before Temporal considers the activity itself to have failed."""
 
-AGENT_RETRY_POLICY = RetryPolicy(maximum_attempts=3)
+AGENT_RETRY_POLICY = RetryPolicy(
+    maximum_attempts=3, non_retryable_error_types=["SchemaCorrectionExhausted"]
+)
 """Temporal's own retry, for a transient failure such as a dropped connection to the LLM
 provider. The bounded schema-correction retries inside the activity are separate and
-much narrower (section 12) - this is not a second copy of that budget."""
+much narrower (section 12) - this is not a second copy of that budget, so an agent that
+already spent its corrections is not run again: the same model given the same prompt
+would be refused the same way, three more times over."""
 
 JOB_ACTIVITY_TIMEOUT = timedelta(seconds=30)
 """Persisting a status transition or a piece of evidence is local, fast persistence."""
@@ -101,10 +105,12 @@ class ResearchJobWorkflow:
 
     # -- JobsPort, backed by durable activities --
 
-    async def transition(self, tenant_id: str, job_id: UUID, target: JobStatus) -> ResearchJob:
+    async def transition(
+        self, tenant_id: str, job_id: UUID, target: JobStatus, detail: str | None = None
+    ) -> ResearchJob:
         return await workflow.execute_activity(  # type: ignore[no-any-return]
             "transition_job",
-            args=[tenant_id, job_id, target],
+            args=[tenant_id, job_id, target, detail],
             start_to_close_timeout=JOB_ACTIVITY_TIMEOUT,
             retry_policy=JOB_RETRY_POLICY,
             result_type=ResearchJob,

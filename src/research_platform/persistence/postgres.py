@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 _JOB_COLUMNS = """
     id, tenant_id, requester_id, question, constraints, source_requirements,
-    budget, status, workflow_id, workflow_run_id, created_at, updated_at
+    budget, status, status_detail, workflow_id, workflow_run_id, created_at, updated_at
 """
 
 _EVIDENCE_COLUMNS = """
@@ -106,8 +106,8 @@ class PostgresJobRepository:
                 INSERT INTO research_jobs ({_JOB_COLUMNS})
                 VALUES (
                     %(id)s, %(tenant_id)s, %(requester_id)s, %(question)s, %(constraints)s,
-                    %(source_requirements)s, %(budget)s, %(status)s, %(workflow_id)s,
-                    %(workflow_run_id)s, %(created_at)s, %(updated_at)s
+                    %(source_requirements)s, %(budget)s, %(status)s, %(status_detail)s,
+                    %(workflow_id)s, %(workflow_run_id)s, %(created_at)s, %(updated_at)s
                 )
                 """,
                 _job_parameters(job),
@@ -152,6 +152,7 @@ class PostgresJobRepository:
                     """
                 UPDATE research_jobs
                 SET status = %(status)s,
+                    status_detail = %(status_detail)s,
                     workflow_id = %(workflow_id)s,
                     workflow_run_id = %(workflow_run_id)s,
                     updated_at = %(updated_at)s
@@ -272,6 +273,7 @@ def _job_parameters(job: ResearchJob) -> dict[str, Any]:
         "source_requirements": Jsonb(job.source_requirements),
         "budget": Jsonb(job.budget.model_dump()),
         "status": job.status.value,
+        "status_detail": job.status_detail,
         "workflow_id": job.workflow_id,
         "workflow_run_id": job.workflow_run_id,
         "created_at": job.created_at,
