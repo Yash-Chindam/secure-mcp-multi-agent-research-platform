@@ -10,17 +10,15 @@ the worker writes is what the requester reads back.
 from __future__ import annotations
 
 import asyncio
-import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
 import httpx
 import pytest
-from crewai.lite_agent_output import LiteAgentOutput
-from crewai.tools import BaseTool
 from fastapi import FastAPI
+from support.scripted import StubExecutor, honest_crew
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
@@ -29,10 +27,9 @@ from temporalio.worker import Worker
 from research_platform.application.jobs import ResearchJobService
 from research_platform.application.workflows import WorkflowNotRunning, WorkflowUnavailable
 from research_platform.domain.models import ResearchJob
-from research_platform.domain.tasks import AgentRole
 from research_platform.main import create_app
 from research_platform.mcp.catalogue import default_registry
-from research_platform.mcp.gateway import CapabilityGateway, ExecutionRequest
+from research_platform.mcp.gateway import CapabilityGateway
 from research_platform.settings import Settings
 from research_platform.workflow.activities import JobActivities, ResearchActivities
 from research_platform.workflow.research_workflow import TASK_QUEUE, ResearchJobWorkflow
@@ -42,96 +39,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 REQUESTER = {"X-Tenant-ID": "acme", "X-Requester-ID": "requester-1", "X-Roles": "requester"}
 REVIEWER = {"X-Tenant-ID": "acme", "X-Requester-ID": "reviewer-1", "X-Roles": "reviewer"}
-
-EVIDENCE_ID = str(uuid4())
-
-PLAN = json.dumps(
-    {
-        "tasks": [
-            {
-                "objective": "Collect the vendor pricing page",
-                "assigned_agent": AgentRole.RESEARCHER.value,
-                "evidence_requirements": ["a dated pricing page"],
-            }
-        ],
-        "rationale": "Pricing must be sourced before it can be compared.",
-    }
-)
-
-SUBMISSION = json.dumps(
-    {
-        "records": [
-            {
-                "excerpt": "Vendor pricing is 20 USD per seat.",
-                "source_uri": "https://vendor.test/pricing",
-                "content_hash": f"sha256:{'0' * 64}",
-                "producing_task_id": str(uuid4()),
-                "tool_invocation_id": str(uuid4()),
-            }
-        ]
-    }
-)
-
-ANALYSIS = json.dumps(
-    {
-        "findings": [
-            {
-                "claim": "The vendor charges 20 USD per seat.",
-                "supporting_evidence_ids": [EVIDENCE_ID],
-                "confidence": 0.9,
-            }
-        ]
-    }
-)
-
-REPORT = json.dumps(
-    {
-        "title": "Vendor pricing",
-        "sections": [
-            {"heading": "Pricing", "body": f"The vendor charges 20 USD per seat [{EVIDENCE_ID}]."}
-        ],
-    }
-)
-
-
-def review(*, requires_reviewer: bool) -> str:
-    return json.dumps(
-        {
-            "verdicts": [
-                {
-                    "claim": "The vendor charges 20 USD per seat.",
-                    "verdict": "supported",
-                    "reasoning": "Matches the source.",
-                }
-            ],
-            "coverage_gaps": ["enterprise pricing was not sourced"] if requires_reviewer else [],
-        }
-    )
-
-
-class StubExecutor:
-    def execute(self, request: ExecutionRequest) -> str:
-        return "Vendor pricing is 20 USD per seat."
-
-
-class ScriptedAgent:
-    """Answers with a fixed response, after an optional action on its tools."""
-
-    def __init__(self, response: str, act: Callable[[list[BaseTool]], None] | None = None) -> None:
-        self._response = response
-        self._act = act
-        self.tools: list[BaseTool] = []
-
-    def kickoff(self, message: str) -> LiteAgentOutput:
-        if self._act is not None:
-            self._act(self.tools)
-        return LiteAgentOutput(raw=self._response, agent_role="agent")
-
-
-def fetch_the_pricing_page(tools: list[BaseTool]) -> None:
-    """What a real researcher does before it answers: call a governed tool."""
-    fetch = next(tool for tool in tools if tool.name == "web_research_fetch")
-    fetch.run(url="https://vendor.test/pricing")
 
 
 @dataclass
@@ -167,25 +74,12 @@ async def running_platform(*, requires_reviewer: bool) -> AsyncIterator[Platform
         jobs: ResearchJobService = app.state.job_service
         registry = default_registry()
 
-        def build_agent(role: AgentRole, tools: list[BaseTool]) -> ScriptedAgent:
-            if role is AgentRole.PLANNER:
-                return ScriptedAgent(PLAN)
-            if role is AgentRole.RESEARCHER:
-                agent = ScriptedAgent(SUBMISSION, act=fetch_the_pricing_page)
-                agent.tools = tools
-                return agent
-            if role is AgentRole.ANALYST:
-                return ScriptedAgent(ANALYSIS)
-            if role is AgentRole.CRITIC:
-                return ScriptedAgent(review(requires_reviewer=requires_reviewer))
-            return ScriptedAgent(REPORT)
-
         research = ResearchActivities(
             gateway=CapabilityGateway(
                 registry=registry, executor=StubExecutor(), audit=jobs.record_invocation
             ),
             registry=registry,
-            build_agent=build_agent,
+            build_agent=honest_crew(requires_reviewer=requires_reviewer),
         )
         persistence = JobActivities(jobs=jobs)
         async with (

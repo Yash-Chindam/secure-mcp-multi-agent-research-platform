@@ -44,6 +44,9 @@ ALLOWED_TRANSITIONS: dict[JobStatus, frozenset[JobStatus]] = {
 }
 
 
+STATUS_DETAIL_LIMIT = 1_000
+
+
 class ResearchBudget(BaseModel):
     max_tool_calls: int = Field(default=50, ge=1, le=10_000)
     max_runtime_seconds: int = Field(default=3_600, ge=30, le=86_400)
@@ -66,6 +69,12 @@ class ResearchJob(BaseModel):
     source_requirements: list[str] = Field(default_factory=list)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     status: JobStatus = JobStatus.CREATED
+    status_detail: str | None = Field(
+        default=None,
+        max_length=STATUS_DETAIL_LIMIT,
+        description="Why the job is in this status, when the status alone does not say - "
+        "what failed, or what a partial result is missing.",
+    )
     workflow_id: str | None = Field(
         default=None,
         max_length=255,
@@ -79,10 +88,17 @@ class ResearchJob(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
-    def transition_to(self, target: JobStatus) -> ResearchJob:
+    def transition_to(self, target: JobStatus, detail: str | None = None) -> ResearchJob:
+        """Move to a new status, replacing any explanation the previous one carried."""
         if target not in ALLOWED_TRANSITIONS[self.status]:
             raise InvalidStateTransition(self.status, target)
-        return self.model_copy(update={"status": target, "updated_at": utc_now()})
+        return self.model_copy(
+            update={
+                "status": target,
+                "status_detail": detail[:STATUS_DETAIL_LIMIT] if detail else None,
+                "updated_at": utc_now(),
+            }
+        )
 
     def with_checkpoint(self, *, workflow_id: str, workflow_run_id: str) -> ResearchJob:
         """Record which durable execution owns this job (section 10's checkpoint).

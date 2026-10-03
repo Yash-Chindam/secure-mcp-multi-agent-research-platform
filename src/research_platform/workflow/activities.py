@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 
 from temporalio import activity
 
+from research_platform.agents.checks import check_analysis, check_report, check_review
 from research_platform.agents.contracts import (
     AnalysisResult,
     CriticReview,
@@ -29,6 +30,7 @@ from research_platform.agents.contracts import (
     ResearchReport,
 )
 from research_platform.agents.crew import KickoffAgent, request_agent_output
+from research_platform.agents.provenance import EvidenceClaims, EvidenceLedger, verify_claims
 from research_platform.agents.tools import (
     ApprovalProvider,
     build_agent_tools,
@@ -92,6 +94,7 @@ class ResearchActivities:
     @activity.defn(name="research_task")
     async def research(self, job: ResearchJob, task: ResearchTask) -> EvidenceSubmission:
         principal = _principal_for(job, AgentRole.RESEARCHER)
+        ledger = EvidenceLedger()
         tools = build_agent_tools(
             gateway=self.gateway,
             registry=self.registry,
@@ -100,18 +103,28 @@ class ResearchActivities:
             task_id=task.id,
             budget=job.budget,
             approval_provider=self.approval_provider,
+            ledger=ledger,
         )
         agent = self.build_agent(AgentRole.RESEARCHER, tools)
         instructions = (
             f"Objective: {task.objective}\n"
             f"Evidence requirements: {', '.join(task.evidence_requirements) or 'none stated'}\n"
             f"Source restrictions: {', '.join(task.source_restrictions) or 'none'}\n\n"
-            "Collect evidence with your tools and produce an EvidenceSubmission. Record "
-            "any requirement you could not meet instead of guessing at it."
+            "Collect evidence with your tools and produce EvidenceClaims. Each claim "
+            "quotes an excerpt exactly as a tool returned it and gives the "
+            "tool_invocation_id printed at the top of that tool result. Record any "
+            "requirement you could not meet instead of guessing at it."
         )
-        result = request_agent_output(agent, AgentRole.RESEARCHER, instructions=instructions)
-        assert isinstance(result, EvidenceSubmission)
-        return result
+        claims = request_agent_output(
+            agent,
+            AgentRole.RESEARCHER,
+            instructions=instructions,
+            verify=lambda claimed: verify_claims(claimed, ledger=ledger, task_id=task.id),
+        )
+        assert isinstance(claims, EvidenceClaims)
+        # The agent supplied excerpts and the calls it says they came from. The source,
+        # the hash and the classification of each record are the platform's own.
+        return verify_claims(claims, ledger=ledger, task_id=task.id)
 
     @activity.defn(name="analyze_evidence")
     async def analyze(self, job: ResearchJob, evidence: list[EvidenceRecord]) -> AnalysisResult:
@@ -132,7 +145,12 @@ class ResearchActivities:
             "Compare this evidence and produce an AnalysisResult. Every finding must cite "
             "the evidence identifiers above; do not invent one."
         )
-        result = request_agent_output(agent, AgentRole.ANALYST, instructions=instructions)
+        result = request_agent_output(
+            agent,
+            AgentRole.ANALYST,
+            instructions=instructions,
+            verify=lambda proposed: check_analysis(proposed, evidence),
+        )
         assert isinstance(result, AnalysisResult)
         return result
 
@@ -160,7 +178,12 @@ class ResearchActivities:
             f"{_describe_evidence(evidence)}\n\n"
             "Judge each claim against the evidence and produce a CriticReview."
         )
-        result = request_agent_output(agent, AgentRole.CRITIC, instructions=instructions)
+        result = request_agent_output(
+            agent,
+            AgentRole.CRITIC,
+            instructions=instructions,
+            verify=lambda review: check_review(review, analysis, evidence),
+        )
         assert isinstance(result, CriticReview)
         return result
 
@@ -188,7 +211,12 @@ class ResearchActivities:
             "identifiers above in square brackets. If the coverage gaps below mean the "
             f"report cannot be complete, mark it partial: {gaps}."
         )
-        result = request_agent_output(agent, AgentRole.REPORTER, instructions=instructions)
+        result = request_agent_output(
+            agent,
+            AgentRole.REPORTER,
+            instructions=instructions,
+            verify=lambda written: check_report(written, evidence),
+        )
         assert isinstance(result, ResearchReport)
         return result
 
@@ -208,7 +236,9 @@ class JobActivities:
     jobs: ResearchJobService
 
     @activity.defn(name="transition_job")
-    async def transition(self, tenant_id: str, job_id: UUID, target: JobStatus) -> ResearchJob:
+    async def transition(
+        self, tenant_id: str, job_id: UUID, target: JobStatus, detail: str | None = None
+    ) -> ResearchJob:
         """Persist a status transition, tolerating a call that already landed.
 
         Temporal delivers an activity at least once: a worker can vanish after this
@@ -221,7 +251,7 @@ class JobActivities:
         current = self.jobs.get(tenant_id, job_id)
         if current.status is target:
             return current
-        return self.jobs.transition(tenant_id, job_id, target)
+        return self.jobs.transition(tenant_id, job_id, target, detail)
 
     @activity.defn(name="add_job_evidence")
     async def add_evidence(

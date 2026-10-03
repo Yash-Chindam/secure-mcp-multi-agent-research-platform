@@ -10,8 +10,9 @@ without assembling a CrewAI ``Task``/``Crew`` around it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from crewai import Agent
 from crewai.lite_agent_output import LiteAgentOutput
@@ -22,10 +23,10 @@ from pydantic import BaseModel
 from research_platform.agents.contracts import (
     AnalysisResult,
     CriticReview,
-    EvidenceSubmission,
     ResearchPlan,
     ResearchReport,
 )
+from research_platform.agents.provenance import EvidenceClaims
 from research_platform.agents.validation import DEFAULT_MAX_ATTEMPTS, BoundedSchemaCorrection
 from research_platform.domain.tasks import AgentRole
 
@@ -69,9 +70,11 @@ AGENT_SPECS: dict[AgentRole, AgentSpec] = {
         goal="Collect dated, source-attributed evidence for one task using only approved tools.",
         backstory=(
             "You gather evidence through the tools you were given, never from your own "
-            "recollection, and you record what you could not find rather than guessing at it."
+            "recollection, and you record what you could not find rather than guessing at it. "
+            "Every excerpt you submit is quoted exactly from a tool result and names that "
+            "result's tool_invocation_id, because the platform checks each one."
         ),
-        contract=EvidenceSubmission,
+        contract=EvidenceClaims,
     ),
     AgentRole.ANALYST: AgentSpec(
         role="Analyst",
@@ -140,8 +143,12 @@ def request_agent_output(
     *,
     instructions: str,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    verify: Callable[[Any], object] | None = None,
 ) -> BaseModel:
     """Ask an agent for its contract, correcting an invalid response a bounded number of times.
+
+    ``verify`` rejects a well-formed response whose references are not real (see
+    ``research_platform.agents.checks``), under the same attempt budget.
 
     Raises ``SchemaCorrectionExhausted`` when the agent cannot produce a conforming
     response within the attempt budget, so the caller can reject the state transition
@@ -156,7 +163,7 @@ def request_agent_output(
         else:
             message = (
                 f"{instructions}\n\n"
-                "Your previous response did not conform to the required schema: "
+                "Your previous response was rejected: "
                 f"{previous_failure}\n"
                 "Respond again with the corrected JSON only, and nothing else."
             )
@@ -167,4 +174,4 @@ def request_agent_output(
             )
         return output.raw
 
-    return correction.resolve(spec.contract, produce)
+    return correction.resolve(spec.contract, produce, verify)

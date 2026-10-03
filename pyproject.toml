@@ -40,6 +40,7 @@ packages = ["src/research_platform"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
 testpaths = ["tests"]
+pythonpath = ["tests"]
 asyncio_mode = "strict"
 markers = [
   "integration: tests that exercise the application boundary",

@@ -65,6 +65,9 @@ _JOBS = (
     CREATE INDEX IF NOT EXISTS research_jobs_by_tenant
         ON research_jobs (tenant_id, created_at DESC)
     """,
+    # Added after the table first shipped; applied in place so an existing database is
+    # brought forward by the same idempotent statements a new one is created with.
+    "ALTER TABLE research_jobs ADD COLUMN IF NOT EXISTS status_detail TEXT",
 )
 
 _EVIDENCE = (

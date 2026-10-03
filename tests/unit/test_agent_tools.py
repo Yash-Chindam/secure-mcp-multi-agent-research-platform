@@ -122,7 +122,9 @@ def test_a_tool_call_reaches_the_gateway_and_returns_the_sanitized_text() -> Non
 
     result = fetch_tool.run(url="https://vendor.test/pricing")
 
-    assert result == "Vendor pricing is 20 USD per seat."
+    identifier, _, text = result.partition("\n")
+    assert identifier.startswith("[tool_invocation_id: ")
+    assert text == "Vendor pricing is 20 USD per seat."
     assert executor.calls[0].arguments == {"url": "https://vendor.test/pricing"}
 
 
@@ -214,7 +216,7 @@ def test_an_approval_provider_authorizes_a_call_that_requires_one() -> None:
         approval_provider=provider,
     )
 
-    assert query_tool.run(**arguments) == "42"
+    assert query_tool.run(**arguments).endswith("]\n42")
 
 
 def test_an_upstream_failure_is_reported_as_text_not_raised() -> None:

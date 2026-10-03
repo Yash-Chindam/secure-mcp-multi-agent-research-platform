@@ -71,18 +71,27 @@ class BoundedSchemaCorrection:
         self,
         contract: type[Contract],
         produce: Callable[[str | None], str],
+        verify: Callable[[Contract], object] | None = None,
     ) -> Contract:
         """Call ``produce`` until it returns the contract, or the budget is spent.
 
         ``produce`` receives ``None`` on the first attempt and the previous failure
         description afterwards, so a correction round names exactly what to fix.
+
+        ``verify`` checks what a schema cannot - that the identifiers a well-formed
+        response cites actually exist - and rejects a response by raising ``ValueError``.
+        A response that fails it is corrected under the same attempt budget as one that
+        fails the schema, because both are an invalid agent output (section 12).
         """
         self.failures.clear()
         correction: str | None = None
         for _ in range(self.max_attempts):
             raw = produce(correction)
             try:
-                return parse_agent_output(contract, raw)
+                parsed = parse_agent_output(contract, raw)
+                if verify is not None:
+                    verify(parsed)
+                return parsed
             except ValidationError as error:
                 correction = describe_validation_failure(error)
             except ValueError as error:

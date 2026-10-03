@@ -140,9 +140,11 @@ class ResearchJobService:
     def list(self, tenant_id: str) -> builtins.list[ResearchJob]:
         return self._repository.list(tenant_id)
 
-    def transition(self, tenant_id: str, job_id: UUID, target: JobStatus) -> ResearchJob:
+    def transition(
+        self, tenant_id: str, job_id: UUID, target: JobStatus, detail: str | None = None
+    ) -> ResearchJob:
         job = self.get(tenant_id, job_id)
-        return self._repository.update(job.transition_to(target))
+        return self._repository.update(job.transition_to(target, detail))
 
     def record_checkpoint(
         self, tenant_id: str, job_id: UUID, *, workflow_id: str, workflow_run_id: str
@@ -184,8 +186,10 @@ class AsyncJobs:
     def __init__(self, service: ResearchJobService) -> None:
         self._service = service
 
-    async def transition(self, tenant_id: str, job_id: UUID, target: JobStatus) -> ResearchJob:
-        return self._service.transition(tenant_id, job_id, target)
+    async def transition(
+        self, tenant_id: str, job_id: UUID, target: JobStatus, detail: str | None = None
+    ) -> ResearchJob:
+        return self._service.transition(tenant_id, job_id, target, detail)
 
     async def add_evidence(
         self, tenant_id: str, job_id: UUID, command: EvidenceRecordCreate
