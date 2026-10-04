@@ -245,6 +245,12 @@ another tenant's job and counts how many get through. The command exits non-zero
 target is missed. Recovery after a worker restart is proven separately, against a real Temporal
 test server, in `tests/integration/test_workflow_recovery.py`.
 
-## Next milestones
+## Known limits
 
-1. Review, report and audit views in the requester interface.
+- The evaluation suite has only been run with a scripted crew. Model quality scores need a run
+  with a real model and its API key.
+- The Python sandbox backend starts containers through a container runtime socket, which should
+  not be mounted into a Kubernetes pod. Back it with a Job or a sandboxed runtime class there.
+- Circuit breaker state is kept per worker, not shared.
+- Agent collaboration is orchestrated by the Temporal workflow calling one CrewAI agent per step,
+  rather than by a CrewAI Flow.

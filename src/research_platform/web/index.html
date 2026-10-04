@@ -7,67 +7,346 @@
     <style>
       :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
       body { margin: 0; background: #08111f; color: #e5eefb; }
-      main { width: min(760px, calc(100% - 2rem)); margin: 4rem auto; }
+      main { width: min(860px, calc(100% - 2rem)); margin: 3rem auto; }
       .eyebrow { color: #6ee7b7; letter-spacing: .12em; text-transform: uppercase; }
-      h1 { font-size: clamp(2rem, 7vw, 4.4rem); line-height: .98; margin: .5rem 0 1rem; }
+      h1 { font-size: clamp(2rem, 6vw, 3.6rem); line-height: 1; margin: .5rem 0 1rem; }
+      h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+      h3 { font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; color: #a9b8cc; margin: 1.25rem 0 .5rem; }
       p { color: #a9b8cc; max-width: 62ch; }
-      form, article { background: #101d2f; border: 1px solid #233754; border-radius: 16px; padding: 1.25rem; }
-      label { display: block; font-weight: 650; margin-bottom: .5rem; }
-      textarea { box-sizing: border-box; width: 100%; min-height: 8rem; resize: vertical; padding: .9rem; border-radius: 10px; border: 1px solid #39506f; background: #07101e; color: inherit; }
-      button { margin-top: .8rem; border: 0; border-radius: 999px; padding: .7rem 1.2rem; background: #6ee7b7; color: #062015; font-weight: 750; cursor: pointer; }
+      form, article, details, #detail { background: #101d2f; border: 1px solid #233754; border-radius: 16px; padding: 1.25rem; }
+      details { margin-bottom: 1rem; }
+      summary { cursor: pointer; font-weight: 650; }
+      label { display: block; font-weight: 650; margin: .8rem 0 .4rem; }
+      input, select, textarea { box-sizing: border-box; width: 100%; padding: .7rem; border-radius: 10px; border: 1px solid #39506f; background: #07101e; color: inherit; font: inherit; }
+      textarea { min-height: 6rem; resize: vertical; }
+      .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; }
+      button { margin-top: .8rem; border: 0; border-radius: 999px; padding: .6rem 1.1rem; background: #6ee7b7; color: #062015; font-weight: 750; cursor: pointer; }
+      button.quiet { background: transparent; color: #6ee7b7; border: 1px solid #2f6f5b; }
+      button.danger { background: #fca5a5; color: #3b0a0a; }
       #message { min-height: 1.5rem; color: #6ee7b7; }
-      #jobs { display: grid; gap: .8rem; margin-top: 1.5rem; }
-      article h2 { font-size: 1rem; margin: 0 0 .5rem; }
+      #message.error { color: #fca5a5; }
+      #jobs { display: grid; gap: .8rem; margin: 1.5rem 0; }
       .status { color: #6ee7b7; font-size: .82rem; text-transform: uppercase; }
+      .status.failed { color: #fca5a5; }
+      .status.partial, .status.review_required { color: #fcd34d; }
+      .muted { color: #8194ad; font-size: .88rem; }
+      .item { border-top: 1px solid #233754; padding: .7rem 0; }
+      .item:first-of-type { border-top: 0; }
+      pre { white-space: pre-wrap; word-break: break-word; background: #07101e; border: 1px solid #233754; border-radius: 10px; padding: 1rem; margin: 0; font: .9rem/1.5 ui-monospace, monospace; }
+      code { font: .85rem ui-monospace, monospace; color: #a9b8cc; }
+      [hidden] { display: none; }
     </style>
   </head>
   <body>
     <main>
       <div class="eyebrow">Evidence first</div>
       <h1>Governed research, built to be audited.</h1>
-      <p>Create a tenant-scoped research assignment. Every later claim, tool call, approval, and artifact will remain traceable to this job.</p>
+      <p>Create a tenant-scoped research assignment. Every claim, tool call, approval and artifact stays traceable to its job.</p>
+
+      <details id="identity">
+        <summary>Signed in as <span id="who"></span></summary>
+        <p class="muted">Development identity. When the platform verifies access tokens, paste one below and these fields are ignored.</p>
+        <div class="row">
+          <div><label for="tenant">Tenant</label><input id="tenant" value="demo"></div>
+          <div><label for="requester">User</label><input id="requester" value="local-user"></div>
+          <div>
+            <label for="role">Role</label>
+            <select id="role">
+              <option value="requester">Requester</option>
+              <option value="reviewer">Reviewer</option>
+              <option value="administrator">Administrator</option>
+            </select>
+          </div>
+          <div>
+            <label for="clearance">Clearance</label>
+            <select id="clearance">
+              <option value="public">Public</option>
+              <option value="internal">Internal</option>
+              <option value="restricted">Restricted</option>
+            </select>
+          </div>
+        </div>
+        <label for="token">Access token</label>
+        <input id="token" type="password" autocomplete="off" placeholder="Optional bearer token">
+      </details>
+
       <form id="research-form">
         <label for="question">Research question</label>
         <textarea id="question" name="question" required minlength="1" maxlength="4000" placeholder="Compare two AI platforms using dated, primary-source evidence."></textarea>
+        <div class="row">
+          <div>
+            <label for="constraints">Constraints</label>
+            <textarea id="constraints" placeholder="One per line"></textarea>
+          </div>
+          <div>
+            <label for="sources">Source requirements</label>
+            <textarea id="sources" placeholder="One per line"></textarea>
+          </div>
+        </div>
+        <div class="row">
+          <div><label for="max-tool-calls">Tool-call budget</label><input id="max-tool-calls" type="number" min="1" max="10000" value="50"></div>
+          <div><label for="max-tokens">Token budget</label><input id="max-tokens" type="number" min="1000" value="2000000"></div>
+          <div><label for="max-cost">Cost budget (USD)</label><input id="max-cost" type="number" min="0.01" step="0.01" value="10"></div>
+        </div>
         <button type="submit">Create assignment</button>
       </form>
       <p id="message" role="status" aria-live="polite"></p>
+
       <section id="jobs" aria-label="Research assignments"></section>
+
+      <section id="detail" aria-label="Assignment detail" hidden>
+        <h2 id="detail-question"></h2>
+        <div id="detail-status" class="status"></div>
+        <p id="detail-reason" class="muted"></p>
+        <p id="detail-usage" class="muted"></p>
+
+        <div id="review" hidden>
+          <h3>Review</h3>
+          <p class="muted">The critic flagged this job. Decide how it should proceed.</p>
+          <button type="button" data-decision="approve">Approve</button>
+          <button type="button" class="quiet" data-decision="request_more_research">Request more research</button>
+          <button type="button" class="danger" data-decision="reject">Reject</button>
+        </div>
+
+        <h3>Findings</h3>
+        <div id="findings"></div>
+        <h3>Evidence</h3>
+        <div id="evidence"></div>
+        <h3>Report</h3>
+        <div id="report"></div>
+        <h3>Audit trail</h3>
+        <div id="audit"></div>
+        <button type="button" class="quiet" id="close-detail">Close</button>
+      </section>
     </main>
     <script>
-      const headers = {"Content-Type": "application/json", "X-Tenant-ID": "demo", "X-Requester-ID": "local-user"};
-      const jobs = document.querySelector("#jobs");
-      const message = document.querySelector("#message");
+      const $ = selector => document.querySelector(selector);
+      const message = $("#message");
+      const ACTIVE = new Set(["created", "planning", "researching", "analyzing", "review_required", "reporting"]);
+      let openJobId = null;
 
-      async function loadJobs() {
-        const response = await fetch("/api/v1/jobs", {headers});
-        const data = await response.json();
-        jobs.replaceChildren(...data.map(job => {
-          const card = document.createElement("article");
-          const title = document.createElement("h2");
-          title.textContent = job.question;
-          const state = document.createElement("div");
-          state.className = "status";
-          state.textContent = job.status;
-          card.append(title, state);
-          return card;
-        }));
+      function headers() {
+        const token = $("#token").value.trim();
+        if (token) return {"Content-Type": "application/json", "Authorization": `Bearer ${token}`};
+        return {
+          "Content-Type": "application/json",
+          "X-Tenant-ID": $("#tenant").value.trim(),
+          "X-Requester-ID": $("#requester").value.trim(),
+          "X-Roles": $("#role").value,
+          "X-Clearance": $("#clearance").value,
+        };
       }
 
-      document.querySelector("#research-form").addEventListener("submit", async event => {
-        event.preventDefault();
-        message.textContent = "Creating assignment...";
-        const question = document.querySelector("#question").value;
-        const response = await fetch("/api/v1/jobs", {method: "POST", headers, body: JSON.stringify({question})});
+      function say(text, isError = false) {
+        message.textContent = text;
+        message.classList.toggle("error", isError);
+      }
+
+      function element(tag, text, className) {
+        const node = document.createElement(tag);
+        if (text !== undefined) node.textContent = text;
+        if (className) node.className = className;
+        return node;
+      }
+
+      function lines(id) {
+        return $(id).value.split("\n").map(line => line.trim()).filter(Boolean);
+      }
+
+      async function problem(response) {
+        try {
+          const body = await response.json();
+          return typeof body.detail === "string" ? body.detail : `Request failed (${response.status}).`;
+        } catch {
+          return `Request failed (${response.status}).`;
+        }
+      }
+
+      function describeUsage(usage) {
+        const tokens = usage.prompt_tokens + usage.completion_tokens;
+        return `${usage.tool_calls} tool calls · ${tokens.toLocaleString("en-US")} tokens · ` +
+          `${usage.cost_usd.toFixed(4)} USD estimated · ${usage.agent_calls} agent calls`;
+      }
+
+      function showIdentity() {
+        const token = $("#token").value.trim();
+        $("#who").textContent = token
+          ? "a verified token"
+          : `${$("#requester").value} (${$("#role").value}, ${$("#clearance").value}) in ${$("#tenant").value}`;
+      }
+
+      async function loadJobs() {
+        const response = await fetch("/api/v1/jobs", {headers: headers()});
         if (!response.ok) {
-          message.textContent = "Could not create the assignment.";
+          say(await problem(response), true);
+          return [];
+        }
+        const data = await response.json();
+        $("#jobs").replaceChildren(...data.map(job => {
+          const card = element("article");
+          card.append(
+            element("h2", job.question),
+            element("div", job.status.replace("_", " "), `status ${job.status}`),
+          );
+          if (job.status_detail) card.append(element("p", job.status_detail, "muted"));
+          const open = element("button", "Open", "quiet");
+          open.type = "button";
+          open.addEventListener("click", () => openJob(job.id));
+          card.append(open);
+          return card;
+        }));
+        return data;
+      }
+
+      async function section(target, path, empty, render) {
+        const container = $(target);
+        const response = await fetch(path, {headers: headers()});
+        if (!response.ok) {
+          container.replaceChildren(element("p", await problem(response), "muted"));
           return;
         }
-        document.querySelector("#question").value = "";
-        message.textContent = "Assignment created.";
+        const items = await response.json();
+        const nodes = items.map(render);
+        if (!nodes.length) nodes.push(element("p", empty, "muted"));
+        const withheld = Number(response.headers.get("X-Withheld-Count") || 0);
+        if (withheld) {
+          nodes.push(element("p", `${withheld} withheld: above your clearance.`, "muted"));
+        }
+        container.replaceChildren(...nodes);
+      }
+
+      async function loadReport(base) {
+        const container = $("#report");
+        const response = await fetch(`${base}/report?format=markdown`, {headers: headers()});
+        if (!response.ok) {
+          container.replaceChildren(element("p", await problem(response), "muted"));
+          return;
+        }
+        const nodes = [element("pre", await response.text())];
+        if (response.headers.get("X-Report-Partial") === "true") {
+          nodes.unshift(element("p", "Partial result: this report is incomplete.", "status partial"));
+        }
+        nodes.push(element("p", `Report hash ${response.headers.get("X-Report-SHA256")}`, "muted"));
+        container.replaceChildren(...nodes);
+      }
+
+      async function openJob(jobId) {
+        openJobId = jobId;
+        const base = `/api/v1/jobs/${jobId}`;
+        const response = await fetch(base, {headers: headers()});
+        if (!response.ok) {
+          say(await problem(response), true);
+          return;
+        }
+        const job = await response.json();
+        $("#detail").hidden = false;
+        $("#detail-question").textContent = job.question;
+        $("#detail-status").textContent = job.status.replace("_", " ");
+        $("#detail-status").className = `status ${job.status}`;
+        $("#detail-reason").textContent = job.status_detail || "";
+        $("#detail-usage").textContent = describeUsage(job.usage);
+        $("#review").hidden = job.status !== "review_required";
+
+        await Promise.all([
+          section("#findings", `${base}/findings`, "No findings yet.", finding => {
+            const item = element("div", undefined, "item");
+            item.append(
+              element("div", finding.claim),
+              element("div",
+                `${finding.critic_verdict} · reviewer ${finding.reviewer_status.replace("_", " ")} · ` +
+                `confidence ${Math.round(finding.confidence * 100)}% · ` +
+                `${finding.supporting_evidence_ids.length} supporting, ` +
+                `${finding.contradicting_evidence_ids.length} contradicting`, "muted"),
+            );
+            return item;
+          }),
+          section("#evidence", `${base}/evidence`, "No evidence yet.", record => {
+            const item = element("div", undefined, "item");
+            item.append(
+              element("div", record.excerpt),
+              element("div", `${record.source_uri} · ${record.trust_level} · ${record.access_class}`, "muted"),
+              element("code", record.content_hash),
+            );
+            return item;
+          }),
+          section("#audit", `${base}/invocations`, "No tool calls yet.", call => {
+            const item = element("div", undefined, "item");
+            const took = call.duration_ms === null ? "" : ` · ${call.duration_ms} ms`;
+            item.append(
+              element("div", `${call.mcp_server}.${call.capability}`),
+              element("div",
+                `${call.authorization_decision} · ${call.outcome}` +
+                (call.error_class === "none" ? "" : ` (${call.error_class.replace("_", " ")})`) +
+                `${took} · policy ${call.policy_version}`, "muted"),
+            );
+            return item;
+          }),
+          loadReport(base),
+        ]);
+      }
+
+      async function decide(decision) {
+        const response = await fetch(`/api/v1/jobs/${openJobId}/review`, {
+          method: "POST", headers: headers(), body: JSON.stringify({decision}),
+        });
+        if (!response.ok) {
+          say(await problem(response), true);
+          return;
+        }
+        say("Decision recorded.");
+        await refresh();
+      }
+
+      async function refresh() {
+        const jobs = await loadJobs();
+        if (openJobId && jobs.some(job => job.id === openJobId)) await openJob(openJobId);
+        return jobs;
+      }
+
+      $("#research-form").addEventListener("submit", async event => {
+        event.preventDefault();
+        say("Creating assignment...");
+        const response = await fetch("/api/v1/jobs", {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({
+            question: $("#question").value,
+            constraints: lines("#constraints"),
+            source_requirements: lines("#sources"),
+            budget: {
+              max_tool_calls: Number($("#max-tool-calls").value),
+              max_tokens: Number($("#max-tokens").value),
+              max_cost_usd: Number($("#max-cost").value),
+            },
+          }),
+        });
+        if (!response.ok) {
+          say(await problem(response), true);
+          return;
+        }
+        for (const id of ["#question", "#constraints", "#sources"]) $(id).value = "";
+        say("Assignment created.");
         await loadJobs();
       });
 
+      for (const button of document.querySelectorAll("[data-decision]")) {
+        button.addEventListener("click", () => decide(button.dataset.decision));
+      }
+      $("#close-detail").addEventListener("click", () => {
+        openJobId = null;
+        $("#detail").hidden = true;
+      });
+      for (const id of ["#tenant", "#requester", "#role", "#clearance", "#token"]) {
+        $(id).addEventListener("change", () => { showIdentity(); say(""); refresh(); });
+      }
+
+      // Keep working jobs current without a reload; stop asking once nothing is in flight.
+      setInterval(async () => {
+        const cards = [...document.querySelectorAll("#jobs .status")];
+        if (cards.some(card => ACTIVE.has(card.className.replace("status ", "")))) await refresh();
+      }, 5000);
+
+      showIdentity();
       loadJobs();
     </script>
   </body>
