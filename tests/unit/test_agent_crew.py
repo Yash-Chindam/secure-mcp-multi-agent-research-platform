@@ -1,7 +1,11 @@
 import json
+from unittest.mock import patch
 
 import pytest
 from crewai.lite_agent_output import LiteAgentOutput
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from research_platform.agents.contracts import ResearchPlan
 from research_platform.agents.crew import AGENT_SPECS, build_agent, request_agent_output
@@ -103,7 +107,7 @@ def test_correction_is_bounded_and_raises_when_exhausted() -> None:
     assert len(agent.messages) == 3
 
 
-def test_request_agent_output_raises_when_kickoff_returns_a_coroutine() -> None:
+def test_an_agent_that_returns_something_other_than_an_answer_is_an_error() -> None:
     async def _coro() -> LiteAgentOutput:
         return LiteAgentOutput(raw=VALID_PLAN, agent_role="researcher")
 
@@ -114,7 +118,38 @@ def test_request_agent_output_raises_when_kickoff_returns_a_coroutine() -> None:
             return pending
 
     try:
-        with pytest.raises(TypeError, match="CrewAI Flow"):
+        with pytest.raises(TypeError, match="did not return an agent output"):
             request_agent_output(AsyncAgent(), AgentRole.PLANNER, instructions="Plan the research.")  # type: ignore[arg-type]
     finally:
         pending.close()
+
+
+def test_each_attempt_is_a_traced_flow_stage() -> None:
+    """Section 13: a CrewAI Flow stage sits between the activity and the agent task."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    agent = FakeAgent(["not json", VALID_PLAN])
+
+    with patch("research_platform.agents.flow.get_tracer", lambda: provider.get_tracer("test")):
+        request_agent_output(agent, AgentRole.PLANNER, instructions="Plan the research.")
+
+    stages = [
+        (span.attributes["flow.stage"], span.attributes.get("flow.outcome"))
+        for span in exporter.get_finished_spans()
+        if span.name == "crewai.flow.stage"
+    ]
+    assert stages == [
+        ("request", None),
+        ("judge", "rejected"),
+        ("correct", None),
+        ("judge", "accepted"),
+    ]
+    assert all(span.attributes["agent_role"] == "planner" for span in exporter.get_finished_spans())
+
+
+def test_a_flow_must_allow_at_least_one_attempt() -> None:
+    with pytest.raises(ValueError, match="at least one attempt"):
+        request_agent_output(
+            FakeAgent([VALID_PLAN]), AgentRole.PLANNER, instructions="Plan.", max_attempts=0
+        )

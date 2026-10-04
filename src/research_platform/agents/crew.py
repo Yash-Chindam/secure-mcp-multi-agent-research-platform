@@ -4,8 +4,9 @@ Sequencing which role runs when - the planner before the researchers, the critic
 the analyst, a durable pause for reviewer approval - belongs to the workflow that drives
 a job, not to this module. What lives here is narrower: for one role and one piece of
 work, ask the agent for its contract and correct it a bounded number of times before
-giving up (section 12), using ``Agent.kickoff`` so a role can be resolved on its own
-without assembling a CrewAI ``Task``/``Crew`` around it.
+giving up (section 12). Each such step runs as a CrewAI Flow
+(``research_platform.agents.flow``), which is the "CrewAI Flow stage" section 13 places
+under a Temporal activity.
 """
 
 from __future__ import annotations
@@ -26,9 +27,10 @@ from research_platform.agents.contracts import (
     ResearchPlan,
     ResearchReport,
 )
+from research_platform.agents.flow import AgentContractFlow
 from research_platform.agents.provenance import EvidenceClaims
 from research_platform.agents.usage import AgentCallStats
-from research_platform.agents.validation import DEFAULT_MAX_ATTEMPTS, BoundedSchemaCorrection
+from research_platform.agents.validation import DEFAULT_MAX_ATTEMPTS
 from research_platform.domain.tasks import AgentRole
 
 
@@ -138,6 +140,26 @@ def build_agent(
     )
 
 
+def _contract_flow(
+    agent: KickoffAgent,
+    role: AgentRole,
+    *,
+    instructions: str,
+    max_attempts: int,
+    verify: Callable[[Any], object] | None,
+    stats: AgentCallStats | None,
+) -> AgentContractFlow:
+    return AgentContractFlow(
+        agent=agent,
+        role=role.value,
+        contract=AGENT_SPECS[role].contract,
+        instructions=instructions,
+        max_attempts=max_attempts,
+        verify=verify,
+        stats=stats,
+    )
+
+
 def request_agent_output(
     agent: KickoffAgent,
     role: AgentRole,
@@ -149,35 +171,45 @@ def request_agent_output(
 ) -> BaseModel:
     """Ask an agent for its contract, correcting an invalid response a bounded number of times.
 
-    ``verify`` rejects a well-formed response whose references are not real (see
-    ``research_platform.agents.checks``), under the same attempt budget. ``stats``
-    is filled in with every attempt made and the tokens each one used, whether or not
-    the call succeeds in the end.
+    The step runs as a CrewAI Flow (``research_platform.agents.flow``). ``verify``
+    rejects a well-formed response whose references are not real (see
+    ``research_platform.agents.checks``), under the same attempt budget. ``stats`` is
+    filled in with every attempt made and the tokens each one used, whether or not the
+    call succeeds in the end.
 
     Raises ``SchemaCorrectionExhausted`` when the agent cannot produce a conforming
     response within the attempt budget, so the caller can reject the state transition
     rather than advance the workflow on an invalid output (section 12).
     """
-    spec = AGENT_SPECS[role]
-    correction = BoundedSchemaCorrection(max_attempts=max_attempts)
+    flow = _contract_flow(
+        agent,
+        role,
+        instructions=instructions,
+        max_attempts=max_attempts,
+        verify=verify,
+        stats=stats,
+    )
+    flow.kickoff()
+    return flow.accepted
 
-    def produce(previous_failure: str | None) -> str:
-        if previous_failure is None:
-            message = instructions
-        else:
-            message = (
-                f"{instructions}\n\n"
-                "Your previous response was rejected: "
-                f"{previous_failure}\n"
-                "Respond again with the corrected JSON only, and nothing else."
-            )
-        output = agent.kickoff(message)
-        if not isinstance(output, LiteAgentOutput):
-            raise TypeError(
-                "agent.kickoff returned a coroutine; call it from inside a CrewAI Flow instead"
-            )
-        if stats is not None:
-            stats.observe(output.usage_metrics)
-        return output.raw
 
-    return correction.resolve(spec.contract, produce, verify)
+async def request_agent_output_async(
+    agent: KickoffAgent,
+    role: AgentRole,
+    *,
+    instructions: str,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    verify: Callable[[Any], object] | None = None,
+    stats: AgentCallStats | None = None,
+) -> BaseModel:
+    """``request_agent_output`` for a caller already inside an event loop, such as an activity."""
+    flow = _contract_flow(
+        agent,
+        role,
+        instructions=instructions,
+        max_attempts=max_attempts,
+        verify=verify,
+        stats=stats,
+    )
+    await flow.kickoff_async()
+    return flow.accepted
