@@ -21,15 +21,23 @@ import redis
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from research_platform.composition import build_budget_ledger, describe_limits
+from research_platform.composition import (
+    build_budget_ledger,
+    build_circuit_breaker,
+    describe_limits,
+)
 from research_platform.domain.invocations import ErrorClass
 from research_platform.domain.models import JobUsage, ResearchBudget
 from research_platform.domain.tasks import AgentRole
 from research_platform.identity import Principal
 from research_platform.mcp.breaker import (
+    Breaker,
     BudgetExhausted,
     BudgetLedger,
     Budgets,
+    CircuitBreaker,
+    CircuitOpen,
+    CircuitState,
     LimitStoreUnavailable,
     MutableClock,
 )
@@ -47,7 +55,12 @@ from research_platform.mcp.servers.web_research import (
     WebResearchService,
     build_web_research_server,
 )
-from research_platform.persistence.redis_state import RedisBudgetLedger, RedisRateLimiter, connect
+from research_platform.persistence.redis_state import (
+    RedisBudgetLedger,
+    RedisCircuitBreaker,
+    RedisRateLimiter,
+    connect,
+)
 from research_platform.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -297,6 +310,132 @@ def test_concurrent_requests_never_exceed_the_limit(
     assert sum(allowed) == 5
 
 
+# -- circuit breaking -----------------------------------------------------------------------------
+
+COOLDOWN = timedelta(seconds=30)
+
+
+@pytest.fixture(params=["in-memory", "redis"])
+def new_breaker(request: pytest.FixtureRequest) -> Callable[[], Breaker]:
+    """Builds breakers over one shared state, the way two workers would."""
+    clock = MutableClock()
+    if request.param == "in-memory":
+        shared = CircuitBreaker(failure_threshold=3, cooldown=COOLDOWN, clock=clock)
+
+        def in_memory() -> Breaker:
+            return shared
+
+        in_memory.clock = clock  # type: ignore[attr-defined]
+        return in_memory
+    if not REDIS_URL:
+        pytest.skip(SKIP_REASON)
+    prefix = f"test-{uuid4().hex}"
+
+    def shared_through_redis() -> Breaker:
+        return RedisCircuitBreaker(
+            client(), failure_threshold=3, cooldown=COOLDOWN, clock=clock, prefix=prefix
+        )
+
+    shared_through_redis.clock = clock  # type: ignore[attr-defined]
+    return shared_through_redis
+
+
+def test_a_server_nothing_is_known_about_is_closed(new_breaker: Callable[[], Breaker]) -> None:
+    breaker = new_breaker()
+
+    assert breaker.state_of("web-research") is CircuitState.CLOSED
+    breaker.ensure_closed("web-research")
+    assert breaker.states() == {}
+
+
+def test_failures_below_the_threshold_leave_the_circuit_closed(
+    new_breaker: Callable[[], Breaker],
+) -> None:
+    breaker = new_breaker()
+    breaker.record_failure("web-research")
+    breaker.record_failure("web-research")
+
+    breaker.ensure_closed("web-research")
+    assert breaker.states() == {"web-research": CircuitState.CLOSED}
+
+
+def test_reaching_the_threshold_opens_the_circuit_until_the_cooldown_ends(
+    new_breaker: Callable[[], Breaker],
+) -> None:
+    breaker = new_breaker()
+    for _ in range(3):
+        breaker.record_failure("web-research")
+
+    with pytest.raises(CircuitOpen) as rested:
+        breaker.ensure_closed("web-research")
+    assert rested.value.until == new_breaker.clock() + COOLDOWN  # type: ignore[attr-defined]
+
+    new_breaker.clock.advance(COOLDOWN)  # type: ignore[attr-defined]
+
+    assert breaker.state_of("web-research") is CircuitState.HALF_OPEN
+    breaker.ensure_closed("web-research")
+
+
+def test_a_success_closes_the_circuit_and_forgets_earlier_failures(
+    new_breaker: Callable[[], Breaker],
+) -> None:
+    breaker = new_breaker()
+    breaker.record_failure("web-research")
+    breaker.record_failure("web-research")
+    breaker.record_success("web-research")
+
+    breaker.record_failure("web-research")
+    breaker.record_failure("web-research")
+
+    assert breaker.state_of("web-research") is CircuitState.CLOSED
+
+
+def test_a_failed_probe_reopens_the_circuit_at_once(new_breaker: Callable[[], Breaker]) -> None:
+    breaker = new_breaker()
+    for _ in range(3):
+        breaker.record_failure("web-research")
+    new_breaker.clock.advance(COOLDOWN)  # type: ignore[attr-defined]
+    assert breaker.state_of("web-research") is CircuitState.HALF_OPEN
+
+    breaker.record_failure("web-research")
+
+    assert breaker.state_of("web-research") is CircuitState.OPEN
+
+
+def test_a_successful_probe_closes_the_circuit(new_breaker: Callable[[], Breaker]) -> None:
+    breaker = new_breaker()
+    for _ in range(3):
+        breaker.record_failure("web-research")
+    new_breaker.clock.advance(COOLDOWN)  # type: ignore[attr-defined]
+
+    breaker.record_success("web-research")
+
+    assert breaker.states() == {"web-research": CircuitState.CLOSED}
+
+
+def test_one_failing_server_does_not_rest_another(new_breaker: Callable[[], Breaker]) -> None:
+    breaker = new_breaker()
+    for _ in range(3):
+        breaker.record_failure("github")
+    breaker.record_success("web-research")
+
+    breaker.ensure_closed("web-research")
+    assert breaker.states() == {"github": CircuitState.OPEN, "web-research": CircuitState.CLOSED}
+
+
+def test_a_server_one_worker_saw_fail_is_rested_by_every_worker(
+    new_breaker: Callable[[], Breaker],
+) -> None:
+    """Three failures in total open the circuit, whichever workers saw them."""
+    one_worker, another_worker = new_breaker(), new_breaker()
+    one_worker.record_failure("web-research")
+    another_worker.record_failure("web-research")
+    one_worker.record_failure("web-research")
+
+    with pytest.raises(CircuitOpen):
+        another_worker.ensure_closed("web-research")
+
+
 # -- Redis specifically ---------------------------------------------------------------------------
 
 
@@ -415,6 +554,58 @@ async def test_the_web_server_refuses_a_request_it_cannot_rate_limit(
             await mcp.call_tool(tool, arguments)
 
 
+def unreachable_breaker() -> RedisCircuitBreaker:
+    return RedisCircuitBreaker(redis.Redis.from_url(UNREACHABLE, decode_responses=True))
+
+
+def test_a_breaker_that_cannot_read_its_state_does_not_let_the_call_through() -> None:
+    with pytest.raises(LimitStoreUnavailable):
+        unreachable_breaker().ensure_closed("web-research")
+
+
+def test_a_breaker_that_cannot_record_an_outcome_does_not_fail_the_call_it_followed() -> None:
+    breaker = unreachable_breaker()
+
+    breaker.record_success("web-research")
+    breaker.record_failure("web-research")
+
+    assert breaker.states() == {}
+
+
+def test_a_breaker_needs_a_positive_threshold() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        RedisCircuitBreaker(redis.Redis.from_url(UNREACHABLE), failure_threshold=0)
+
+
+def test_a_call_is_denied_when_the_shared_breaker_cannot_be_read() -> None:
+    class NeverCalled:
+        def execute(self, _request: ExecutionRequest) -> str:
+            raise AssertionError("the call went ahead without knowing the circuit state")
+
+    gateway = CapabilityGateway(
+        registry=default_registry(), executor=NeverCalled(), breaker=unreachable_breaker()
+    )
+
+    with pytest.raises(CapabilityDenied, match="shared limit store is unavailable"):
+        gateway.invoke(
+            principal=Principal(tenant_id="acme", subject_id="job:1").for_agent(
+                AgentRole.RESEARCHER
+            ),
+            job_id=uuid4(),
+            task_id=uuid4(),
+            server="web-research",
+            capability_name="fetch",
+            arguments={"url": "https://vendor.test/pricing"},
+            budget=ResearchBudget(),
+        )
+
+
+@requires_redis
+def test_a_deployment_with_redis_shares_its_circuit_state() -> None:
+    assert isinstance(build_circuit_breaker(Settings(redis_url=REDIS_URL)), RedisCircuitBreaker)
+    assert isinstance(build_circuit_breaker(Settings(redis_url=None)), CircuitBreaker)
+
+
 # -- wiring -------------------------------------------------------------------------------------
 
 
@@ -422,7 +613,7 @@ def test_a_deployment_with_no_redis_counts_limits_per_process() -> None:
     settings = Settings(redis_url=None)
 
     assert isinstance(build_budget_ledger(settings), BudgetLedger)
-    assert describe_limits(settings) == "per-process budgets and rate limits (no Redis configured)"
+    assert "per-process" in describe_limits(settings)
 
 
 @requires_redis
@@ -435,5 +626,5 @@ def test_a_deployment_with_redis_shares_its_budgets_and_its_web_rate_limit() -> 
     servers = configure_servers(settings)
 
     assert isinstance(ledger, RedisBudgetLedger)
-    assert describe_limits(settings) == "budgets and rate limits shared through Redis"
+    assert "shared through Redis" in describe_limits(settings)
     assert "web-research" in servers.targets

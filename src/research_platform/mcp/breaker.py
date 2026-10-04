@@ -45,8 +45,28 @@ class _Circuit:
     opened_at: datetime | None = None
 
 
+class Breaker(Protocol):
+    """What a circuit breaker must do, wherever it keeps its state."""
+
+    def state_of(self, server: str) -> CircuitState: ...
+
+    def states(self) -> dict[str, CircuitState]: ...
+
+    def ensure_closed(self, server: str) -> None: ...
+
+    def record_success(self, server: str) -> None: ...
+
+    def record_failure(self, server: str) -> None: ...
+
+
 class CircuitBreaker:
-    """Stop calling an MCP server that is repeatedly failing, and probe before resuming."""
+    """Stop calling an MCP server that is repeatedly failing, and probe before resuming.
+
+    This one keeps its state in process memory, so each worker learns for itself that a
+    server is failing. ``research_platform.persistence.redis_state.RedisCircuitBreaker``
+    keeps the same state in Redis, so a server one worker has seen fail is rested by all
+    of them.
+    """
 
     def __init__(
         self,
@@ -101,7 +121,8 @@ class CircuitBreaker:
             self._circuits[server] = circuit
 
     def _refresh(self, server: str) -> _Circuit:
-        circuit = self._circuits.setdefault(server, _Circuit())
+        # Looking at a server is not a reason to remember it: only a recorded call is.
+        circuit = self._circuits.get(server) or _Circuit()
         if circuit.state is CircuitState.OPEN:
             assert circuit.opened_at is not None
             if self._clock() - circuit.opened_at >= self._cooldown:
