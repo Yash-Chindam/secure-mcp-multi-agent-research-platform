@@ -23,7 +23,14 @@ from research_platform.domain.invocations import (
 )
 from research_platform.domain.models import ResearchBudget, utc_now
 from research_platform.identity import Principal
-from research_platform.mcp.breaker import BudgetExhausted, BudgetLedger, CircuitBreaker, CircuitOpen
+from research_platform.mcp.breaker import (
+    BudgetExhausted,
+    BudgetLedger,
+    Budgets,
+    CircuitBreaker,
+    CircuitOpen,
+    LimitStoreUnavailable,
+)
 from research_platform.mcp.policy import AuthorizationRequest, PolicyEngine, RegistryPolicyEngine
 from research_platform.mcp.registry import Capability, CapabilityRegistry
 from research_platform.mcp.sanitizer import UntrustedContent, sanitize_result
@@ -173,7 +180,7 @@ class CapabilityGateway:
         registry: CapabilityRegistry,
         executor: CapabilityExecutor,
         policy: PolicyEngine | None = None,
-        budgets: BudgetLedger | None = None,
+        budgets: Budgets | None = None,
         breaker: CircuitBreaker | None = None,
         tracer: Tracer | None = None,
         metrics: PlatformMetrics | None = None,
@@ -189,7 +196,7 @@ class CapabilityGateway:
         self._audit = audit
 
     @property
-    def budgets(self) -> BudgetLedger:
+    def budgets(self) -> Budgets:
         return self._budgets
 
     @property
@@ -332,6 +339,9 @@ class CapabilityGateway:
             self._budgets.reserve_call(job_id, budget)
         except BudgetExhausted as error:
             raise audit.denied(str(error), ErrorClass.BUDGET_EXHAUSTED) from error
+        except LimitStoreUnavailable as error:
+            # A call that cannot be counted against its budget is not made.
+            raise audit.denied(str(error), ErrorClass.UPSTREAM_UNAVAILABLE) from error
 
         try:
             self._breaker.ensure_closed(capability.server)

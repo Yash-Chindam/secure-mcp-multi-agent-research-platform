@@ -31,7 +31,11 @@ from research_platform.mcp.servers.github_server import GitHubService, build_git
 from research_platform.mcp.servers.postgres_server import PostgresService, build_postgres_server
 from research_platform.mcp.servers.sandbox_boundary import SandboxLimits
 from research_platform.mcp.servers.sandbox_server import SandboxService, build_sandbox_server
-from research_platform.mcp.servers.web_boundary import DomainPolicy, SlidingWindowRateLimiter
+from research_platform.mcp.servers.web_boundary import (
+    DomainPolicy,
+    RateLimiter,
+    SlidingWindowRateLimiter,
+)
 from research_platform.mcp.servers.web_research import WebResearchService, build_web_research_server
 
 
@@ -40,6 +44,7 @@ def build_servers(
     web_backend: WebBackend | None = None,
     web_policy: DomainPolicy | None = None,
     web_requests_per_minute: int = 30,
+    web_limiter: RateLimiter | None = None,
     workspace_roots: WorkspaceRoots | None = None,
     sql_backend: SqlBackend | None = None,
     tenant_schemas: dict[str, str] | None = None,
@@ -57,7 +62,7 @@ def build_servers(
             WebResearchService(
                 backend=web_backend,
                 policy=web_policy,
-                limiter=SlidingWindowRateLimiter(limit=web_requests_per_minute),
+                limiter=web_limiter or SlidingWindowRateLimiter(limit=web_requests_per_minute),
             )
         )
 

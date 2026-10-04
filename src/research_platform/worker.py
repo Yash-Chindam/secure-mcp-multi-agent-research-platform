@@ -33,10 +33,11 @@ from research_platform.composition import (
     build_job_repository,
     describe_artifacts,
     describe_identity,
+    describe_limits,
     describe_persistence,
 )
 from research_platform.domain.invocations import ErrorClass
-from research_platform.mcp.breaker import BudgetLedger
+from research_platform.mcp.breaker import Budgets
 from research_platform.mcp.catalogue import DEFAULT_CAPABILITIES
 from research_platform.mcp.fastmcp_executor import FastMCPExecutor
 from research_platform.mcp.gateway import CapabilityExecutor, ExecutionRequest, UpstreamError
@@ -124,7 +125,7 @@ def build_research_activities(
 def build_job_activities(
     settings: Settings,
     jobs: ResearchJobService | None = None,
-    budgets: BudgetLedger | None = None,
+    budgets: Budgets | None = None,
 ) -> JobActivities:
     """The activities that persist status transitions, evidence and findings.
 
@@ -180,6 +181,7 @@ async def run(settings: Settings | None = None) -> None:
     logger.info("metrics: %s", metrics.description)
     logger.info("persistence: %s", describe_persistence(settings))
     logger.info("artifacts: %s", describe_artifacts(settings))
+    logger.info("limits: %s", describe_limits(settings))
 
     client = await Client.connect(
         settings.temporal_target_host,

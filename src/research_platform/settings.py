@@ -97,6 +97,11 @@ class Settings(BaseSettings):
         default=None,
         description="PostgreSQL system of record; unset keeps job state in process memory.",
     )
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis that budgets and rate limits are counted in, so every worker "
+        "shares them; unset counts them per process.",
+    )
     artifact_endpoint: str | None = Field(
         default=None,
         description="URL of the MinIO/S3 object store reports are exported to; unset keeps "
@@ -174,6 +179,10 @@ class Settings(BaseSettings):
     @property
     def state_is_durable(self) -> bool:
         return bool(self.database_url)
+
+    @property
+    def limits_are_shared(self) -> bool:
+        return bool(self.redis_url)
 
     @property
     def artifacts_are_durable(self) -> bool:

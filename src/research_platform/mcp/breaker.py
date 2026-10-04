@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from threading import RLock
+from typing import Protocol
 from uuid import UUID
 
 from research_platform.domain.models import JobUsage, ResearchBudget, utc_now
@@ -108,6 +109,36 @@ class CircuitBreaker:
         return circuit
 
 
+class LimitStoreUnavailable(RuntimeError):
+    """The store that counts budgets or request rates could not be reached.
+
+    Raised instead of guessing: work that cannot be accounted for is refused.
+    """
+
+
+class Budgets(Protocol):
+    """What a budget ledger must do, wherever it keeps its counts."""
+
+    def usage(self, job_id: UUID) -> JobUsage: ...
+
+    def remaining_calls(self, job_id: UUID, budget: ResearchBudget) -> int: ...
+
+    def reserve_call(self, job_id: UUID, budget: ResearchBudget) -> int: ...
+
+    def ensure_within(self, job_id: UUID, budget: ResearchBudget) -> None: ...
+
+    def record_agent_call(
+        self,
+        job_id: UUID,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cost_usd: float = 0.0,
+        active_seconds: float = 0.0,
+        corrections: int = 0,
+    ) -> JobUsage: ...
+
+
 class BudgetLedger:
     """What each job has spent, so an exhausted budget stops new work (section 12).
 
@@ -115,6 +146,10 @@ class BudgetLedger:
     Tokens, cost and working time are only known once an agent call has finished, so
     they are checked before the next one starts: a job may overshoot by the call that
     crossed the line, and is then refused any further agent work.
+
+    This one counts in process memory, which is right for a single worker and for tests.
+    ``research_platform.persistence.redis_state.RedisBudgetLedger`` keeps the same
+    counts in Redis so every worker spends against one total.
     """
 
     def __init__(self) -> None:

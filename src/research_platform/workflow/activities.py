@@ -51,7 +51,7 @@ from research_platform.domain.models import (
 )
 from research_platform.domain.tasks import AgentRole, ResearchTask
 from research_platform.identity import Principal
-from research_platform.mcp.breaker import BudgetLedger
+from research_platform.mcp.breaker import Budgets
 from research_platform.mcp.gateway import CapabilityGateway
 from research_platform.mcp.registry import CapabilityRegistry
 from research_platform.observability.metrics import PlatformMetrics, get_metrics
@@ -299,7 +299,7 @@ class JobActivities:
     """
 
     jobs: ResearchJobService
-    budgets: BudgetLedger | None = None
+    budgets: Budgets | None = None
     """The ledger agents and tools spend against. When given, every status the job
     reaches is stored with what the job had spent by then, so a requester reading the
     job sees its tokens, cost and tool calls without access to the ledger itself."""

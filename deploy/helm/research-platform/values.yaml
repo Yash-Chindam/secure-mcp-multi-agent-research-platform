@@ -38,6 +38,13 @@ settings:
   # out of these values; empty also means the platform falls back to per-process
   # in-memory job state, which an api/worker pair cannot share.
   databaseUrl: "postgresql://research:research@{{ .Release.Name }}-postgresql:5432/research_platform"
+  # Redis, where budgets and rate limits are counted so every worker and MCP server
+  # replica spends against one total (section 6). Rendered into a chart-managed Secret
+  # because it carries the password, which matches redis.auth.password below. Leave
+  # empty and supply RESEARCH_REDIS_URL through existingSecretName to keep it out of
+  # these values; empty also means each process counts its own limits, so a job gets
+  # its full budget from every worker.
+  redisUrl: "redis://:research@{{ .Release.Name }}-redis-master:6379/0"
   # The object store reports, provenance manifests and evidence bundles are exported
   # to (section 9). The access key and secret are rendered into a chart-managed Secret,
   # like databaseUrl, and match minio.auth below. Leave the two keys empty and supply
@@ -146,6 +153,9 @@ temporal-postgresql:
 
 redis:
   enabled: true
+  auth:
+    # Matches the password in settings.redisUrl above. Override both together.
+    password: research
   commonLabels:
     plane: data
 

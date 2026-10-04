@@ -13,6 +13,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from threading import RLock
+from typing import Protocol
 from urllib.parse import urlsplit
 
 from research_platform.domain.models import utc_now
@@ -119,6 +120,14 @@ class RateLimitExceeded(RuntimeError):
         self.key = key
         self.limit = limit
         self.window = window
+
+
+class RateLimiter(Protocol):
+    """Caps requests per key over a moving window, wherever the window is kept."""
+
+    def remaining(self, key: str) -> int: ...
+
+    def acquire(self, key: str) -> int: ...
 
 
 @dataclass

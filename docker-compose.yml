@@ -36,6 +36,9 @@ x-app-environment: &app-environment
   RESEARCH_TEMPORAL_TARGET_HOST: temporal:7233
   RESEARCH_WORKFLOWS_ENABLED: "true"
   RESEARCH_DATABASE_URL: postgresql://research:research@postgres:5432/research_platform
+  # Budgets and rate limits are counted in Redis so every worker and server replica
+  # spends against one total.
+  RESEARCH_REDIS_URL: redis://redis:6379/0
   RESEARCH_ARTIFACT_ENDPOINT: http://minio:9000
   RESEARCH_ARTIFACT_ACCESS_KEY: minioadmin
   RESEARCH_ARTIFACT_SECRET_KEY: minioadmin
@@ -56,6 +59,8 @@ services:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_started
+      redis:
         condition: service_started
       temporal:
         condition: service_started
@@ -79,6 +84,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+      redis:
+        condition: service_started
       temporal:
         condition: service_started
       opa:
@@ -99,7 +106,11 @@ services:
     command: ["python", "-m", "research_platform.mcp.servers.serve", "web-research"]
     environment:
       <<: *app-environment
-    networks: [mcp, observability]
+    depends_on:
+      redis:
+        condition: service_started
+    # On the data network only to reach Redis, where its request rate limit is counted.
+    networks: [mcp, data, observability]
 
   # ---- data plane ----
 

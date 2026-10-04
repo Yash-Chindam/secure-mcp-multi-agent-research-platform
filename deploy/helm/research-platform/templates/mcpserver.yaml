@@ -51,6 +51,10 @@ spec:
             - secretRef:
                 name: {{ include "research-platform.fullname" $ }}-database
             {{- end }}
+            {{- if $.Values.settings.redisUrl }}
+            - secretRef:
+                name: {{ include "research-platform.fullname" $ }}-redis-url
+            {{- end }}
             {{- if $.Values.existingSecretName }}
             - secretRef:
                 name: {{ $.Values.existingSecretName }}
