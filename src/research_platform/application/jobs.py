@@ -24,6 +24,7 @@ from research_platform.domain.models import (
     Finding,
     FindingRecord,
     JobStatus,
+    JobUsage,
     ResearchJob,
     ResearchJobCreate,
 )
@@ -205,10 +206,15 @@ class ResearchJobService:
         return self._repository.list(tenant_id)
 
     def transition(
-        self, tenant_id: str, job_id: UUID, target: JobStatus, detail: str | None = None
+        self,
+        tenant_id: str,
+        job_id: UUID,
+        target: JobStatus,
+        detail: str | None = None,
+        usage: JobUsage | None = None,
     ) -> ResearchJob:
         job = self.get(tenant_id, job_id)
-        return self._repository.update(job.transition_to(target, detail))
+        return self._repository.update(job.transition_to(target, detail, usage))
 
     def record_checkpoint(
         self, tenant_id: str, job_id: UUID, *, workflow_id: str, workflow_run_id: str

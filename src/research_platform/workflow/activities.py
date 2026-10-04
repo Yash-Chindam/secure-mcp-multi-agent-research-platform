@@ -14,11 +14,13 @@ activities a fake agent instead of one backed by a real LLM (see
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel
 from temporalio import activity
 
 from research_platform.agents.checks import check_analysis, check_report, check_review
@@ -37,6 +39,7 @@ from research_platform.agents.tools import (
     describe_visible_capabilities,
     no_approval,
 )
+from research_platform.agents.usage import AgentCallStats, TokenPricing
 from research_platform.application.jobs import ResearchJobService
 from research_platform.domain.models import (
     EvidenceRecord,
@@ -48,8 +51,10 @@ from research_platform.domain.models import (
 )
 from research_platform.domain.tasks import AgentRole, ResearchTask
 from research_platform.identity import Principal
+from research_platform.mcp.breaker import BudgetLedger
 from research_platform.mcp.gateway import CapabilityGateway
 from research_platform.mcp.registry import CapabilityRegistry
+from research_platform.observability.metrics import PlatformMetrics, get_metrics
 
 
 def principal_for(job: ResearchJob, role: AgentRole) -> Principal:
@@ -85,6 +90,50 @@ class ResearchActivities:
     registry: CapabilityRegistry
     build_agent: Callable[[AgentRole, list[Any]], KickoffAgent]
     approval_provider: ApprovalProvider = field(default=no_approval)
+    pricing: TokenPricing = field(default_factory=TokenPricing)
+    metrics: PlatformMetrics | None = None
+
+    def _ask(
+        self,
+        job: ResearchJob,
+        role: AgentRole,
+        agent: KickoffAgent,
+        instructions: str,
+        verify: Callable[[Any], object] | None = None,
+    ) -> BaseModel:
+        """Run one agent call against the job's budget, and account for what it spent.
+
+        The job's token, cost and time budgets are checked before the model is called,
+        so a job that has spent one is refused new work (section 12). What the call
+        spent is recorded whether it succeeded or not: a response that was rejected
+        three times cost three responses.
+        """
+        metrics = self.metrics or get_metrics()
+        attributes = {"tenant.id": job.tenant_id, "agent_role": role.value}
+        if activity.in_activity() and activity.info().attempt > 1:
+            metrics.activity_retries.add(1, attributes)
+        budgets = self.gateway.budgets
+        budgets.ensure_within(job.id, job.budget)
+        stats = AgentCallStats()
+        started = time.monotonic()
+        try:
+            return request_agent_output(
+                agent, role, instructions=instructions, verify=verify, stats=stats
+            )
+        finally:
+            cost = self.pricing.cost_of(stats.prompt_tokens, stats.completion_tokens)
+            budgets.record_agent_call(
+                job.id,
+                prompt_tokens=stats.prompt_tokens,
+                completion_tokens=stats.completion_tokens,
+                cost_usd=cost,
+                active_seconds=time.monotonic() - started,
+                corrections=stats.corrections,
+            )
+            metrics.llm_tokens.add(stats.prompt_tokens, attributes | {"token.type": "input"})
+            metrics.llm_tokens.add(stats.completion_tokens, attributes | {"token.type": "output"})
+            metrics.llm_cost.add(cost, attributes)
+            metrics.agent_corrections.add(stats.corrections, attributes)
 
     @activity.defn(name="plan_research")
     async def plan(self, job: ResearchJob) -> ResearchPlan:
@@ -98,7 +147,7 @@ class ResearchActivities:
             f"Capabilities available to the crew:\n{catalogue}\n\n"
             "Decompose this into a ResearchPlan."
         )
-        result = request_agent_output(agent, AgentRole.PLANNER, instructions=instructions)
+        result = self._ask(job, AgentRole.PLANNER, agent, instructions)
         assert isinstance(result, ResearchPlan)
         return result
 
@@ -126,11 +175,12 @@ class ResearchActivities:
             "tool_invocation_id printed at the top of that tool result. Record any "
             "requirement you could not meet instead of guessing at it."
         )
-        claims = request_agent_output(
-            agent,
+        claims = self._ask(
+            job,
             AgentRole.RESEARCHER,
-            instructions=instructions,
-            verify=lambda claimed: verify_claims(claimed, ledger=ledger, task_id=task.id),
+            agent,
+            instructions,
+            lambda claimed: verify_claims(claimed, ledger=ledger, task_id=task.id),
         )
         assert isinstance(claims, EvidenceClaims)
         # The agent supplied excerpts and the calls it says they came from. The source,
@@ -156,11 +206,12 @@ class ResearchActivities:
             "Compare this evidence and produce an AnalysisResult. Every finding must cite "
             "the evidence identifiers above; do not invent one."
         )
-        result = request_agent_output(
-            agent,
+        result = self._ask(
+            job,
             AgentRole.ANALYST,
-            instructions=instructions,
-            verify=lambda proposed: check_analysis(proposed, evidence),
+            agent,
+            instructions,
+            lambda proposed: check_analysis(proposed, evidence),
         )
         assert isinstance(result, AnalysisResult)
         return result
@@ -189,11 +240,12 @@ class ResearchActivities:
             f"{_describe_evidence(evidence)}\n\n"
             "Judge each claim against the evidence and produce a CriticReview."
         )
-        result = request_agent_output(
-            agent,
+        result = self._ask(
+            job,
             AgentRole.CRITIC,
-            instructions=instructions,
-            verify=lambda review: check_review(review, analysis, evidence),
+            agent,
+            instructions,
+            lambda review: check_review(review, analysis, evidence),
         )
         assert isinstance(result, CriticReview)
         return result
@@ -222,11 +274,12 @@ class ResearchActivities:
             "identifiers above in square brackets. If the coverage gaps below mean the "
             f"report cannot be complete, mark it partial: {gaps}."
         )
-        result = request_agent_output(
-            agent,
+        result = self._ask(
+            job,
             AgentRole.REPORTER,
-            instructions=instructions,
-            verify=lambda written: check_report(written, evidence),
+            agent,
+            instructions,
+            lambda written: check_report(written, evidence),
         )
         assert isinstance(result, ResearchReport)
         return result
@@ -246,6 +299,10 @@ class JobActivities:
     """
 
     jobs: ResearchJobService
+    budgets: BudgetLedger | None = None
+    """The ledger agents and tools spend against. When given, every status the job
+    reaches is stored with what the job had spent by then, so a requester reading the
+    job sees its tokens, cost and tool calls without access to the ledger itself."""
 
     @activity.defn(name="transition_job")
     async def transition(
@@ -263,7 +320,8 @@ class JobActivities:
         current = self.jobs.get(tenant_id, job_id)
         if current.status is target:
             return current
-        return self.jobs.transition(tenant_id, job_id, target, detail)
+        usage = self.budgets.usage(job_id) if self.budgets is not None else None
+        return self.jobs.transition(tenant_id, job_id, target, detail, usage)
 
     @activity.defn(name="add_job_evidence")
     async def add_evidence(

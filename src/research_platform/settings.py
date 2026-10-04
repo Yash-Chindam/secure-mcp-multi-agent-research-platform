@@ -120,6 +120,14 @@ class Settings(BaseSettings):
         description="The model identifier crewai.Agent is built with; not a secret.",
     )
 
+    llm_input_cost_per_million_usd: float = Field(
+        default=0.15,
+        ge=0,
+        description="Price of the configured model's input tokens, used to estimate a "
+        "job's cost against its budget. Set it to match RESEARCH_AGENT_LLM.",
+    )
+    llm_output_cost_per_million_usd: float = Field(default=0.60, ge=0)
+
     @property
     def tokens_are_verified(self) -> bool:
         return bool(self.oidc_issuer and self.oidc_audience)

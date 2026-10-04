@@ -261,3 +261,38 @@ async def test_an_output_the_agent_cannot_correct_is_not_retried_by_temporal() -
     assert outcome.job.status is JobStatus.FAILED
     assert "SchemaCorrectionExhausted" in (outcome.failure or "")
     assert len(calls) == 3  # one activity attempt, three bounded corrections
+
+
+async def test_a_job_that_spends_its_token_budget_ends_partial_and_says_what_it_spent() -> None:
+    """Section 12, through real activities: stop new work, keep what was found."""
+
+    class Metered:
+        """Wraps a scripted agent so each response reports 600 prompt tokens."""
+
+        def __init__(self, agent: ScriptedAgent) -> None:
+            self._agent = agent
+
+        def kickoff(self, message: str) -> Any:
+            output = self._agent.kickoff(message)
+            return output.model_copy(update={"usage_metrics": {"prompt_tokens": 600}})
+
+    def metered_crew(role: AgentRole, tools: list[BaseTool]) -> Any:
+        return Metered(honest_crew()(role, tools))
+
+    job = new_job().model_copy(
+        update={"budget": ResearchBudget(max_tool_calls=10, max_tokens=1_000)}
+    )
+    research, persistence, jobs = build_activities(job, metered_crew)
+    persistence = JobActivities(jobs=jobs, budgets=research.gateway.budgets)
+
+    outcome = await run_to_completion(job, registered(research, persistence))
+
+    # The planner and the researcher each used 600 tokens; the analyst was refused.
+    stored = jobs.get(TENANT, job.id)
+    assert outcome.job.status is JobStatus.PARTIAL
+    assert stored.status_detail == f"BudgetExhausted: job {job.id} reached its 1000 token budget"
+    assert stored.usage.prompt_tokens == 1_200
+    assert stored.usage.agent_calls == 2
+    assert stored.usage.tool_calls == 1
+    assert len(jobs.list_evidence(TENANT, job.id)) == 1
+    assert outcome.report is None

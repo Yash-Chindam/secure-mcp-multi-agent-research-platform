@@ -5,23 +5,24 @@ place that decides the instrument for each: a counter for something that only ev
 up (calls, denials, injection flags, unsupported citations), a histogram for something
 whose distribution matters (latency, approval wait time), an up-down counter for
 something that also goes back down (active jobs). Call sites read as what happened, not
-as the OpenTelemetry API. Circuit state is not a separate instrument here: every MCP call
-already carries an ``error_class`` attribute, and a circuit held open shows up as a run of
-``mcp.invocation.count`` with ``error_class=upstream_unavailable`` - one dimension on the
-counter every call already increments, rather than a second instrument to keep in sync
-with it.
+as the OpenTelemetry API. Circuit state is an observable gauge read from the breaker
+itself when metrics are collected, so it cannot drift from the state calls are actually
+being refused under.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.metrics import CallbackOptions, Observation
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
+from research_platform.mcp.breaker import CircuitState
 from research_platform.settings import Settings
 
 SERVICE = "secure-mcp-research-platform"
@@ -104,6 +105,47 @@ class PlatformMetrics:
             unit="{source}",
             description="Cited sources re-read at publication, by whether they had drifted.",
         )
+        self.findings = meter.create_counter(
+            "research.findings",
+            unit="{finding}",
+            description="Claims a job settled on, by critic verdict (claim support).",
+        )
+        self.llm_tokens = meter.create_counter(
+            "research.llm.tokens",
+            unit="{token}",
+            description="Tokens the model provider reported, by agent role and direction.",
+        )
+        self.llm_cost = meter.create_counter(
+            "research.llm.cost",
+            unit="USD",
+            description="Estimated model cost, from token counts and the configured price.",
+        )
+        self.agent_corrections = meter.create_counter(
+            "research.agent.schema_corrections",
+            unit="{attempt}",
+            description="Agent responses rejected and sent back for correction.",
+        )
+        self.activity_retries = meter.create_counter(
+            "research.activity.retries",
+            unit="{attempt}",
+            description="Activity attempts after the first, by activity.",
+        )
+        self.job_tokens = meter.create_histogram(
+            "research.job.tokens",
+            unit="{token}",
+            description="Tokens one job used by the time it ended.",
+        )
+        self.job_cost = meter.create_histogram(
+            "research.job.cost",
+            unit="USD",
+            description="Estimated cost of one job by the time it ended.",
+        )
+        self.job_active_time = meter.create_histogram(
+            "research.job.active_time",
+            unit="s",
+            description="Time agents spent working on one job, excluding reviewer waits.",
+        )
+        self._meter = meter
         self.mcp_calls = meter.create_counter(
             "mcp.invocation.count",
             unit="{call}",
@@ -123,6 +165,23 @@ class PlatformMetrics:
             "mcp.invocation.injection_flags",
             unit="{flag}",
             description="Injection patterns detected in a tool result.",
+        )
+
+    def observe_circuits(self, states: Callable[[], dict[str, CircuitState]]) -> None:
+        """Report each MCP server's circuit state: 0 closed, 1 half-open, 2 open."""
+        levels = {CircuitState.CLOSED: 0, CircuitState.HALF_OPEN: 1, CircuitState.OPEN: 2}
+
+        def read(_options: CallbackOptions) -> Iterable[Observation]:
+            return [
+                Observation(levels[state], {"mcp.server": server})
+                for server, state in states().items()
+            ]
+
+        self._meter.create_observable_gauge(
+            "mcp.circuit.state",
+            callbacks=[read],
+            unit="{state}",
+            description="Circuit state per MCP server: 0 closed, 1 half-open, 2 open.",
         )
 
 

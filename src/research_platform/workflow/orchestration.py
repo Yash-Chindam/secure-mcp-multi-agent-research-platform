@@ -106,6 +106,9 @@ class OrchestrationActivities:
     """
 
 
+BUDGET_EXHAUSTED = "BudgetExhausted"
+"""How a spent budget is recognised once it has crossed an activity boundary by name."""
+
 MAX_REVIEW_CYCLES = 2
 """How many times a reviewer may send a job back for more research before it stops.
 
@@ -128,14 +131,27 @@ class ResearchOutcome:
 
 async def _record_findings(
     jobs: JobsPort,
+    metrics: PlatformMetrics,
     job: ResearchJob,
     analysis: AnalysisResult,
     critique: CriticReview,
     reviewer_status: ReviewerStatus,
 ) -> None:
-    await jobs.record_findings(
-        job.tenant_id, job.id, derive_findings(analysis, critique, reviewer_status)
-    )
+    findings = derive_findings(analysis, critique, reviewer_status)
+    await jobs.record_findings(job.tenant_id, job.id, findings)
+    if reviewer_status is ReviewerStatus.PENDING:
+        return
+    # Counted once the findings are settled, not while a reviewer is still deciding:
+    # this is section 13's claim-support figure, by verdict.
+    for finding in findings:
+        metrics.findings.add(
+            1,
+            {
+                "tenant.id": job.tenant_id,
+                "critic_verdict": finding.critic_verdict.value,
+                "reviewer_status": finding.reviewer_status.value,
+            },
+        )
 
 
 def _task_from(planned: PlannedTask, *, job: ResearchJob) -> ResearchTask:
@@ -168,12 +184,25 @@ async def run_research_job(
     span.set_attribute("tenant.id", job.tenant_id)
     metrics.active_jobs.add(1, {"tenant.id": job.tenant_id})
     try:
-        return await _run_research_job(job, jobs=jobs, activities=activities, metrics=metrics)
-    except Exception as error:
-        return await _fail(job, jobs, error)
+        try:
+            outcome = await _run_research_job(
+                job, jobs=jobs, activities=activities, metrics=metrics
+            )
+        except Exception as error:
+            outcome = await _fail(job, jobs, error)
+        _record_job_usage(outcome.job, metrics)
+        return outcome
     finally:
         metrics.active_jobs.add(-1, {"tenant.id": job.tenant_id})
         span.end()
+
+
+def _record_job_usage(job: ResearchJob, metrics: PlatformMetrics) -> None:
+    """Record what the finished job spent: section 13's tokens and cost per job."""
+    attributes = {"tenant.id": job.tenant_id, "status": job.status.value}
+    metrics.job_tokens.record(job.usage.total_tokens, attributes)
+    metrics.job_cost.record(job.usage.cost_usd, attributes)
+    metrics.job_active_time.record(job.usage.active_seconds, attributes)
 
 
 def _describe(error: BaseException) -> str:
@@ -182,7 +211,10 @@ def _describe(error: BaseException) -> str:
     # A failure that crossed an activity boundary keeps its original class name in
     # ``type``; the exception object itself is the transport's generic wrapper.
     name = getattr(cause, "type", None) or type(cause).__name__
-    return f"{name}: {cause}"
+    # The wrapper renders itself as "Type: message" already, so its own message is used
+    # where it has one; otherwise the reason would name the failure twice.
+    message = getattr(cause, "message", None) or str(cause)
+    return f"{name}: {message}"
 
 
 async def _fail(job: ResearchJob, jobs: JobsPort, error: Exception) -> ResearchOutcome:
@@ -195,6 +227,17 @@ async def _fail(job: ResearchJob, jobs: JobsPort, error: Exception) -> ResearchO
     be recorded, the original error is raised so the failure is not hidden.
     """
     reason = _describe(error)
+    if reason.startswith(BUDGET_EXHAUSTED):
+        # Running out of budget is not a fault. Section 12 has the job stop new work and
+        # return what it has, clearly labelled, so it ends partial wherever its status
+        # allows that. Before any evidence exists there is nothing partial to return,
+        # and the job falls through to failed with the same reason.
+        try:
+            partial = await jobs.transition(job.tenant_id, job.id, JobStatus.PARTIAL, reason)
+        except Exception:
+            pass
+        else:
+            return ResearchOutcome(job=partial, report=None, evidence=[], failure=reason)
     try:
         failed = await jobs.transition(job.tenant_id, job.id, JobStatus.FAILED, reason)
     except Exception:
@@ -240,7 +283,7 @@ async def _run_research_job(
 
         # Findings are stored as soon as the critic has judged them, so a reviewer - and
         # anyone reading the job while it waits - sees what is being decided.
-        record = partial(_record_findings, jobs, job, analysis, critique)
+        record = partial(_record_findings, jobs, metrics, job, analysis, critique)
         if not critique.requires_reviewer:
             await record(ReviewerStatus.NOT_REQUIRED)
             break

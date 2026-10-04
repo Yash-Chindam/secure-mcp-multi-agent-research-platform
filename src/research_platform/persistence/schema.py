@@ -69,6 +69,7 @@ _JOBS = (
     # brought forward by the same idempotent statements a new one is created with.
     "ALTER TABLE research_jobs ADD COLUMN IF NOT EXISTS status_detail TEXT",
     "ALTER TABLE research_jobs ADD COLUMN IF NOT EXISTS clearance TEXT NOT NULL DEFAULT 'public'",
+    "ALTER TABLE research_jobs ADD COLUMN IF NOT EXISTS usage JSONB NOT NULL DEFAULT '{}'::jsonb",
 )
 
 _EVIDENCE = (
