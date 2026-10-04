@@ -2,8 +2,8 @@ apiVersion: v2
 name: research-platform
 description: Secure MCP Multi-Agent Research Platform - section 15 deployment topology
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.9.0
+appVersion: "0.9.0"
 
 # Data and observability planes are composed from maintained upstream charts rather than
 # reimplemented here - see section 6's technology selection. Each is optional

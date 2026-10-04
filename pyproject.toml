@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "secure-mcp-research-platform"
-version = "0.1.0"
+version = "0.9.0"
 description = "Governed, tenant-aware multi-agent research platform"
 readme = "README.md"
 requires-python = ">=3.12"
