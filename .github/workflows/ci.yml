@@ -50,6 +50,7 @@ jobs:
           --health-retries 10
     env:
       RESEARCH_TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
+      RESEARCH_TEST_ARTIFACT_ENDPOINT: http://localhost:9000
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -57,6 +58,20 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
+      # The artifact store contract runs against a real S3-compatible store. It is
+      # started here rather than as a service container because the image needs a
+      # command, which a service container cannot be given.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio --user 0:0 -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            cgr.dev/chainguard/minio:latest server /data
+          for attempt in $(seq 1 30); do
+            curl -sf http://localhost:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          docker logs minio
+          exit 1
       - run: pytest tests/unit tests/integration --cov --cov-report=term-missing --cov-report=xml
       - uses: actions/upload-artifact@v7
         if: always()
@@ -86,6 +101,7 @@ jobs:
           --health-retries 10
     env:
       RESEARCH_TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
+      RESEARCH_TEST_ARTIFACT_ENDPOINT: http://localhost:9000
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -93,6 +109,20 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
+      # The artifact store contract runs against a real S3-compatible store. It is
+      # started here rather than as a service container because the image needs a
+      # command, which a service container cannot be given.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio --user 0:0 -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            cgr.dev/chainguard/minio:latest server /data
+          for attempt in $(seq 1 30); do
+            curl -sf http://localhost:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          docker logs minio
+          exit 1
       - run: pytest tests/integration -m integration
 
   e2e:

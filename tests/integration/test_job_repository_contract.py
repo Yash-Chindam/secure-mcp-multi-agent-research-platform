@@ -27,6 +27,7 @@ from research_platform.application.jobs import (
     JobNotFoundError,
     JobRepository,
 )
+from research_platform.application.publication import ReportPublication
 from research_platform.domain.invocations import (
     AuthorizationDecision,
     ErrorClass,
@@ -35,10 +36,13 @@ from research_platform.domain.invocations import (
 )
 from research_platform.domain.models import (
     AccessClass,
+    CriticVerdict,
     EvidenceRecord,
+    FindingRecord,
     JobStatus,
     ResearchBudget,
     ResearchJob,
+    ReviewerStatus,
     TrustLevel,
 )
 from research_platform.persistence.postgres import (
@@ -68,8 +72,9 @@ _GRANT_APPLICATION_ROLE = (
     END $$
     """,
     f"GRANT USAGE ON SCHEMA public TO {APPLICATION_ROLE}",
-    "GRANT SELECT, INSERT, UPDATE ON research_jobs, evidence_records, tool_invocations "
-    f"TO {APPLICATION_ROLE}",
+    "GRANT SELECT, INSERT, UPDATE ON research_jobs, evidence_records, tool_invocations, "
+    f"report_publications TO {APPLICATION_ROLE}",
+    f"GRANT SELECT, INSERT, DELETE ON findings TO {APPLICATION_ROLE}",
 )
 
 
@@ -81,7 +86,10 @@ def pool() -> Iterator[ConnectionPool[Connection[Any]]]:
     opened.wait(timeout=30)
     create_schema(opened)
     with opened.connection() as connection:
-        connection.execute("TRUNCATE research_jobs, evidence_records, tool_invocations")
+        connection.execute(
+            "TRUNCATE research_jobs, evidence_records, tool_invocations, findings, "
+            "report_publications"
+        )
         for statement in _GRANT_APPLICATION_ROLE:
             connection.execute(statement)
     yield opened
@@ -299,6 +307,166 @@ def test_the_audit_trail_is_never_readable_by_another_tenant(repository: JobRepo
     repository.record_invocation(an_invocation("tenant-a", job.id))
 
     assert repository.list_invocations("tenant-b", job.id) == []
+
+
+def a_finding(job: ResearchJob, claim: str = "The list price fell.") -> FindingRecord:
+    return FindingRecord(
+        tenant_id=job.tenant_id,
+        job_id=job.id,
+        claim=claim,
+        supporting_evidence_ids=[uuid4(), uuid4()],
+        calculation_ids=[uuid4()],
+        confidence=0.75,
+        critic_verdict=CriticVerdict.SUPPORTED,
+        reviewer_status=ReviewerStatus.APPROVED,
+    )
+
+
+def a_publication(job: ResearchJob, **changes: Any) -> ReportPublication:
+    fields: dict[str, Any] = {
+        "job_id": job.id,
+        "tenant_id": job.tenant_id,
+        "report_key": f"jobs/{job.id}/report.json",
+        "markdown_key": f"jobs/{job.id}/report.md",
+        "manifest_key": f"jobs/{job.id}/provenance-manifest.json",
+        "evidence_key": f"jobs/{job.id}/evidence.json",
+        "report_sha256": f"sha256:{'c' * 64}",
+        "is_partial": False,
+    }
+    return ReportPublication.model_validate(fields | changes)
+
+
+def test_findings_round_trip_in_order_with_every_field(repository: JobRepository) -> None:
+    job = repository.add(a_job())
+    first, second = a_finding(job, "First claim."), a_finding(job, "Second claim.")
+
+    repository.replace_findings(job.tenant_id, job.id, [first, second])
+
+    stored = repository.list_findings(job.tenant_id, job.id)
+    assert [finding.claim for finding in stored] == ["First claim.", "Second claim."]
+    assert stored[0].id == first.id
+    assert stored[0].supporting_evidence_ids == first.supporting_evidence_ids
+    assert stored[0].calculation_ids == first.calculation_ids
+    assert stored[0].confidence == 0.75
+    assert stored[0].critic_verdict is CriticVerdict.SUPPORTED
+    assert stored[0].reviewer_status is ReviewerStatus.APPROVED
+
+
+def test_storing_findings_again_replaces_the_earlier_set(repository: JobRepository) -> None:
+    job = repository.add(a_job())
+    repository.replace_findings(job.tenant_id, job.id, [a_finding(job), a_finding(job)])
+
+    repository.replace_findings(job.tenant_id, job.id, [a_finding(job, "The only claim.")])
+
+    assert [finding.claim for finding in repository.list_findings(job.tenant_id, job.id)] == [
+        "The only claim."
+    ]
+
+
+def test_a_job_can_be_left_with_no_findings(repository: JobRepository) -> None:
+    job = repository.add(a_job())
+    repository.replace_findings(job.tenant_id, job.id, [a_finding(job)])
+
+    repository.replace_findings(job.tenant_id, job.id, [])
+
+    assert repository.list_findings(job.tenant_id, job.id) == []
+
+
+def test_findings_cannot_be_stored_for_a_job_that_does_not_exist(
+    repository: JobRepository,
+) -> None:
+    orphan = a_job()
+
+    with pytest.raises(JobNotFoundError):
+        repository.replace_findings(orphan.tenant_id, orphan.id, [a_finding(orphan)])
+
+
+def test_findings_are_never_listed_for_or_replaced_by_another_tenant(
+    repository: JobRepository,
+) -> None:
+    job = repository.add(a_job(tenant_id="tenant-a"))
+    repository.replace_findings(job.tenant_id, job.id, [a_finding(job)])
+
+    with pytest.raises(JobNotFoundError):
+        repository.list_findings("tenant-b", job.id)
+    with pytest.raises(JobNotFoundError):
+        repository.replace_findings("tenant-b", job.id, [])
+    assert len(repository.list_findings("tenant-a", job.id)) == 1
+
+
+def test_a_publication_round_trips_with_its_keys_and_drifted_sources(
+    repository: JobRepository,
+) -> None:
+    job = repository.add(a_job())
+    drifted = uuid4()
+
+    repository.record_publication(
+        a_publication(job, is_partial=True, drifted_evidence_ids=[drifted])
+    )
+
+    stored = repository.get_publication(job.tenant_id, job.id)
+    assert stored is not None
+    assert stored.report_key == f"jobs/{job.id}/report.json"
+    assert stored.manifest_key == f"jobs/{job.id}/provenance-manifest.json"
+    assert stored.report_sha256 == f"sha256:{'c' * 64}"
+    assert stored.is_partial is True
+    assert stored.drifted_evidence_ids == [drifted]
+
+
+def test_a_job_that_has_not_published_has_no_publication(repository: JobRepository) -> None:
+    job = repository.add(a_job())
+
+    assert repository.get_publication(job.tenant_id, job.id) is None
+
+
+def test_publishing_again_replaces_the_record_rather_than_failing(
+    repository: JobRepository,
+) -> None:
+    """A redelivered publication activity must land on the same record."""
+    job = repository.add(a_job())
+    repository.record_publication(a_publication(job))
+
+    repository.record_publication(a_publication(job, report_sha256=f"sha256:{'d' * 64}"))
+
+    stored = repository.get_publication(job.tenant_id, job.id)
+    assert stored is not None
+    assert stored.report_sha256 == f"sha256:{'d' * 64}"
+
+
+def test_a_publication_cannot_be_recorded_for_a_job_that_does_not_exist(
+    repository: JobRepository,
+) -> None:
+    with pytest.raises(JobNotFoundError):
+        repository.record_publication(a_publication(a_job()))
+
+
+def test_a_publication_is_never_readable_by_another_tenant(repository: JobRepository) -> None:
+    job = repository.add(a_job(tenant_id="tenant-a"))
+    repository.record_publication(a_publication(job))
+
+    with pytest.raises(JobNotFoundError):
+        repository.get_publication("tenant-b", job.id)
+
+
+@requires_postgres
+@pytest.mark.parametrize("table", ["findings", "report_publications"])
+def test_row_level_security_covers_findings_and_publications(
+    restricted_pool: ConnectionPool[Connection[Any]], table: str
+) -> None:
+    """The same database boundary as jobs: no predicate, and still only one tenant."""
+    repository = PostgresJobRepository(restricted_pool)
+    for tenant in ("tenant-a", "tenant-b"):
+        job = repository.add(a_job(tenant_id=tenant))
+        repository.replace_findings(tenant, job.id, [a_finding(job)])
+        repository.record_publication(a_publication(job))
+
+    with restricted_pool.connection() as connection:
+        undeclared = connection.execute(f"SELECT tenant_id FROM {table}").fetchall()
+        connection.execute("SELECT set_config('research.tenant_id', 'tenant-a', true)")
+        visible = connection.execute(f"SELECT tenant_id FROM {table}").fetchall()
+
+    assert undeclared == []
+    assert [row[0] for row in visible] == ["tenant-a"]
 
 
 @requires_postgres

@@ -41,6 +41,8 @@ from research_platform.application.jobs import ResearchJobService
 from research_platform.domain.models import (
     EvidenceRecord,
     EvidenceRecordCreate,
+    Finding,
+    FindingRecord,
     JobStatus,
     ResearchJob,
 )
@@ -50,7 +52,7 @@ from research_platform.mcp.gateway import CapabilityGateway
 from research_platform.mcp.registry import CapabilityRegistry
 
 
-def _principal_for(job: ResearchJob, role: AgentRole) -> Principal:
+def principal_for(job: ResearchJob, role: AgentRole) -> Principal:
     return Principal(
         tenant_id=job.tenant_id, subject_id=f"job:{job.id}", roles=frozenset()
     ).for_agent(role)
@@ -77,7 +79,7 @@ class ResearchActivities:
 
     @activity.defn(name="plan_research")
     async def plan(self, job: ResearchJob) -> ResearchPlan:
-        principal = _principal_for(job, AgentRole.PLANNER)
+        principal = principal_for(job, AgentRole.PLANNER)
         catalogue = "\n".join(describe_visible_capabilities(self.registry, principal))
         agent = self.build_agent(AgentRole.PLANNER, [])
         instructions = (
@@ -93,7 +95,7 @@ class ResearchActivities:
 
     @activity.defn(name="research_task")
     async def research(self, job: ResearchJob, task: ResearchTask) -> EvidenceSubmission:
-        principal = _principal_for(job, AgentRole.RESEARCHER)
+        principal = principal_for(job, AgentRole.RESEARCHER)
         ledger = EvidenceLedger()
         tools = build_agent_tools(
             gateway=self.gateway,
@@ -128,7 +130,7 @@ class ResearchActivities:
 
     @activity.defn(name="analyze_evidence")
     async def analyze(self, job: ResearchJob, evidence: list[EvidenceRecord]) -> AnalysisResult:
-        principal = _principal_for(job, AgentRole.ANALYST)
+        principal = principal_for(job, AgentRole.ANALYST)
         tools = build_agent_tools(
             gateway=self.gateway,
             registry=self.registry,
@@ -158,7 +160,7 @@ class ResearchActivities:
     async def critique(
         self, job: ResearchJob, analysis: AnalysisResult, evidence: list[EvidenceRecord]
     ) -> CriticReview:
-        principal = _principal_for(job, AgentRole.CRITIC)
+        principal = principal_for(job, AgentRole.CRITIC)
         tools = build_agent_tools(
             gateway=self.gateway,
             registry=self.registry,
@@ -191,7 +193,7 @@ class ResearchActivities:
     async def report(
         self, job: ResearchJob, critique: CriticReview, evidence: list[EvidenceRecord]
     ) -> ResearchReport:
-        principal = _principal_for(job, AgentRole.REPORTER)
+        principal = principal_for(job, AgentRole.REPORTER)
         tools = build_agent_tools(
             gateway=self.gateway,
             registry=self.registry,
@@ -227,10 +229,11 @@ class JobActivities:
 
     ``research_platform.workflow.orchestration`` only ever sees the ``JobsPort``
     protocol; when Temporal drives it, ``research_platform.workflow.research_workflow``
-    implements that protocol by calling these two activities, so a status transition or
-    a piece of evidence survives a worker restart the same way every other step in the
-    pipeline does (section 12). Both are safe to redeliver: Temporal runs an activity at
-    least once, so each recognises a call that already landed instead of repeating it.
+    implements that protocol by calling these activities, so a status transition, a
+    piece of evidence or a set of findings survives a worker restart the same way every
+    other step in the pipeline does (section 12). All are safe to redeliver: Temporal
+    runs an activity at least once, so each recognises a call that already landed instead
+    of repeating it.
     """
 
     jobs: ResearchJobService
@@ -274,3 +277,10 @@ class JobActivities:
             ):
                 return existing
         return self.jobs.add_evidence(tenant_id, job_id, command)
+
+    @activity.defn(name="record_job_findings")
+    async def record_findings(
+        self, tenant_id: str, job_id: UUID, findings: list[Finding]
+    ) -> list[FindingRecord]:
+        """Store the job's current findings. Replacing the set makes a redelivery harmless."""
+        return self.jobs.record_findings(tenant_id, job_id, findings)

@@ -97,6 +97,14 @@ class Settings(BaseSettings):
         default=None,
         description="PostgreSQL system of record; unset keeps job state in process memory.",
     )
+    artifact_endpoint: str | None = Field(
+        default=None,
+        description="URL of the MinIO/S3 object store reports are exported to; unset keeps "
+        "artifacts in process memory.",
+    )
+    artifact_access_key: str | None = Field(default=None)
+    artifact_secret_key: SecretStr | None = Field(default=None)
+    artifact_bucket: str = Field(default="research-artifacts", min_length=3, max_length=63)
     workflows_enabled: bool = Field(
         default=False,
         description="Start a durable workflow for each new job; off leaves a created job "
@@ -158,6 +166,10 @@ class Settings(BaseSettings):
     @property
     def state_is_durable(self) -> bool:
         return bool(self.database_url)
+
+    @property
+    def artifacts_are_durable(self) -> bool:
+        return bool(self.artifact_endpoint)
 
     @property
     def policy_is_externally_enforced(self) -> bool:

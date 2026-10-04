@@ -15,6 +15,7 @@ from threading import RLock
 from typing import Protocol
 from uuid import UUID
 
+from research_platform.application.publication import ReportPublication
 from research_platform.domain.invocations import ToolInvocation
 from research_platform.domain.models import (
     EvidenceRecord,
@@ -61,6 +62,10 @@ class JobRepository(Protocol):
 
     def list_findings(self, tenant_id: str, job_id: UUID) -> builtins.list[FindingRecord]: ...
 
+    def record_publication(self, publication: ReportPublication) -> ReportPublication: ...
+
+    def get_publication(self, tenant_id: str, job_id: UUID) -> ReportPublication | None: ...
+
 
 class InMemoryJobRepository:
     """Development repository that enforces tenant isolation at every lookup."""
@@ -70,6 +75,7 @@ class InMemoryJobRepository:
         self._evidence: dict[tuple[str, UUID], list[EvidenceRecord]] = {}
         self._invocations: dict[tuple[str, UUID], list[ToolInvocation]] = {}
         self._findings: dict[tuple[str, UUID], list[FindingRecord]] = {}
+        self._publications: dict[tuple[str, UUID], ReportPublication] = {}
         self._lock = RLock()
 
     def add(self, job: ResearchJob) -> ResearchJob:
@@ -149,6 +155,22 @@ class InMemoryJobRepository:
         with self._lock:
             return list(self._findings.get((tenant_id, job_id), []))
 
+    def record_publication(self, publication: ReportPublication) -> ReportPublication:
+        """Store where a job's report was published, replacing an earlier publication.
+
+        One job has one published report. Publishing again - a redelivered activity -
+        points the job at the same artifacts, so the latest record simply wins.
+        """
+        self.get(publication.tenant_id, publication.job_id)
+        with self._lock:
+            self._publications[(publication.tenant_id, publication.job_id)] = publication
+        return publication
+
+    def get_publication(self, tenant_id: str, job_id: UUID) -> ReportPublication | None:
+        self.get(tenant_id, job_id)
+        with self._lock:
+            return self._publications.get((tenant_id, job_id))
+
 
 class ResearchJobService:
     def __init__(self, repository: JobRepository) -> None:
@@ -214,6 +236,13 @@ class ResearchJobService:
 
     def list_findings(self, tenant_id: str, job_id: UUID) -> builtins.list[FindingRecord]:
         return self._repository.list_findings(tenant_id, job_id)
+
+    def record_publication(self, publication: ReportPublication) -> ReportPublication:
+        return self._repository.record_publication(publication)
+
+    def get_publication(self, tenant_id: str, job_id: UUID) -> ReportPublication | None:
+        """Where the job's report was published, or ``None`` if it has not been."""
+        return self._repository.get_publication(tenant_id, job_id)
 
 
 class AsyncJobs:

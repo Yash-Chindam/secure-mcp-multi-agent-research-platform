@@ -42,11 +42,18 @@ chart's own development, change a required value's default).
   `SandboxBackend` with a Job or a sandboxed runtime class rather than enabling this.
 - **A model provider key**: the worker's agents call an LLM through CrewAI; supply the
   provider's key (for example `OPENAI_API_KEY`) through `existingSecretName`.
+- **Object store credentials**: reports and provenance manifests are exported to the
+  bundled MinIO using `settings.artifactAccessKey` / `artifactSecretKey`, which default
+  to the same development values as `minio.auth`. For production, leave both empty and
+  supply `RESEARCH_ARTIFACT_ACCESS_KEY` and `RESEARCH_ARTIFACT_SECRET_KEY` through
+  `existingSecretName`, using a key scoped to the one bucket, and point
+  `settings.artifactEndpoint` at an `https://` endpoint.
 - **A restricted database role**: `settings.databaseUrl` connects the api and worker to
   the bundled PostgreSQL as its owner, which works but bypasses nothing only because
   the schema forces row-level security on the owner too. A superuser, or any role with
   BYPASSRLS, is exempt from those policies entirely - the platform logs a warning at
   startup when it finds itself connected as one. For production, create a dedicated
-  non-superuser role with SELECT/INSERT/UPDATE on the three tables and supply its URL
+  non-superuser role with SELECT/INSERT/UPDATE on the platform's tables (and DELETE on
+  `findings`, which are replaced as a set) and supply its URL
   as `RESEARCH_DATABASE_URL` through `existingSecretName`, leaving
   `settings.databaseUrl` empty.

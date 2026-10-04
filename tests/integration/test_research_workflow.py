@@ -29,6 +29,7 @@ from temporalio.worker import Worker
 
 from research_platform.agents.contracts import AnalysisResult
 from research_platform.agents.provenance import hash_content
+from research_platform.application.artifacts import InMemoryArtifactStore
 from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
 from research_platform.domain.models import (
     EvidenceRecord,
@@ -40,8 +41,10 @@ from research_platform.domain.models import (
 from research_platform.domain.tasks import AgentRole
 from research_platform.mcp.catalogue import default_registry
 from research_platform.mcp.gateway import CapabilityGateway
+from research_platform.worker import registered_activities
 from research_platform.workflow.activities import JobActivities, ResearchActivities
 from research_platform.workflow.orchestration import ReviewerDecision
+from research_platform.workflow.publishing import GatewaySourceChecker, PublicationActivities
 from research_platform.workflow.research_workflow import TASK_QUEUE, ResearchJobWorkflow
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -81,15 +84,12 @@ def registered(
     research: ResearchActivities, persistence: JobActivities, **replaced: Any
 ) -> Sequence[Callable[..., Any]]:
     """Every activity the workflow calls, with any named one swapped for a substitute."""
-    activities = {
-        "plan": research.plan,
-        "research": research.research,
-        "analyze": research.analyze,
-        "critique": research.critique,
-        "report": research.report,
-        "transition": persistence.transition,
-        "add_evidence": persistence.add_evidence,
-    }
+    publication = PublicationActivities(
+        jobs=persistence.jobs,
+        artifacts=InMemoryArtifactStore(),
+        sources=GatewaySourceChecker(research.gateway),
+    )
+    activities = registered_activities(research, persistence, publication)
     return list((activities | replaced).values())
 
 
@@ -129,7 +129,9 @@ async def test_recorded_evidence_carries_provenance_the_platform_established_its
     await run_to_completion(job, registered(research, persistence))
 
     [evidence] = jobs.list_evidence(TENANT, job.id)
-    [call] = jobs.list_invocations(TENANT, job.id)
+    # The first call captured the evidence; publication re-read the source after it.
+    call, reread = jobs.list_invocations(TENANT, job.id)
+    assert reread.capability == call.capability == "fetch"
     assert evidence.tool_invocation_id == call.id
     assert evidence.producing_task_id == call.task_id
     assert str(evidence.source_uri) == "https://vendor.test/pricing"

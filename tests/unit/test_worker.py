@@ -1,5 +1,6 @@
 import pytest
 
+from research_platform.application.artifacts import InMemoryArtifactStore
 from research_platform.domain.tasks import AgentRole
 from research_platform.identity import Principal
 from research_platform.mcp.catalogue import default_registry
@@ -9,9 +10,11 @@ from research_platform.worker import (
     UnconfiguredExecutor,
     build_job_activities,
     build_job_service,
+    build_publication_activities,
     build_research_activities,
 )
 from research_platform.workflow.activities import JobActivities, ResearchActivities
+from research_platform.workflow.publishing import GatewaySourceChecker
 
 
 def test_a_deployment_with_no_web_domains_configured_registers_no_capabilities() -> None:
@@ -53,3 +56,17 @@ def test_a_worker_writes_its_audit_trail_and_job_state_to_one_shared_store() -> 
 
     assert persistence.jobs is jobs
     assert research.gateway._audit == jobs.record_invocation
+
+
+def test_a_worker_publishes_through_the_same_store_and_gateway_it_researches_with() -> None:
+    """A re-read of a cited source must be governed by the gateway that captured it."""
+    settings = Settings(database_url=None, web_allowed_domains="vendor.test")
+    jobs = build_job_service(settings)
+    research = build_research_activities(settings, jobs)
+
+    publication = build_publication_activities(settings, jobs, research)
+
+    assert publication.jobs is jobs
+    assert isinstance(publication.artifacts, InMemoryArtifactStore)
+    assert isinstance(publication.sources, GatewaySourceChecker)
+    assert publication.sources.gateway is research.gateway

@@ -19,6 +19,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from typing import Protocol
 from uuid import UUID
 
@@ -31,11 +32,15 @@ from research_platform.agents.contracts import (
     ResearchReport,
     unsupported_citations,
 )
+from research_platform.application.publication import ReportPublication, derive_findings
 from research_platform.domain.models import (
     EvidenceRecord,
     EvidenceRecordCreate,
+    Finding,
+    FindingRecord,
     JobStatus,
     ResearchJob,
+    ReviewerStatus,
     utc_now,
 )
 from research_platform.domain.tasks import AgentRole, ResearchTask
@@ -60,6 +65,10 @@ class JobsPort(Protocol):
     async def add_evidence(
         self, tenant_id: str, job_id: UUID, command: EvidenceRecordCreate
     ) -> EvidenceRecord: ...
+
+    async def record_findings(
+        self, tenant_id: str, job_id: UUID, findings: list[Finding]
+    ) -> list[FindingRecord]: ...
 
 
 class ReviewerDecision(StrEnum):
@@ -87,6 +96,14 @@ class OrchestrationActivities:
     critique: Callable[[ResearchJob, AnalysisResult, list[EvidenceRecord]], Awaitable[CriticReview]]
     report: Callable[[ResearchJob, CriticReview, list[EvidenceRecord]], Awaitable[ResearchReport]]
     await_reviewer_decision: Callable[[ResearchJob, CriticReview], Awaitable[ReviewerDecision]]
+    publish: (
+        Callable[[ResearchJob, ResearchReport, list[str]], Awaitable[ReportPublication]] | None
+    ) = None
+    """Exports the report and its provenance manifest (section 9's last step).
+
+    ``None`` runs the pipeline without exporting anything, which is what a caller that
+    has no artifact store - a unit test of the branching, mostly - wants.
+    """
 
 
 MAX_REVIEW_CYCLES = 2
@@ -106,6 +123,19 @@ class ResearchOutcome:
     report: ResearchReport | None
     evidence: list[EvidenceRecord]
     failure: str | None = None
+    publication: ReportPublication | None = None
+
+
+async def _record_findings(
+    jobs: JobsPort,
+    job: ResearchJob,
+    analysis: AnalysisResult,
+    critique: CriticReview,
+    reviewer_status: ReviewerStatus,
+) -> None:
+    await jobs.record_findings(
+        job.tenant_id, job.id, derive_findings(analysis, critique, reviewer_status)
+    )
 
 
 def _task_from(planned: PlannedTask, *, job: ResearchJob) -> ResearchTask:
@@ -208,8 +238,13 @@ async def _run_research_job(
         analysis = await activities.analyze(job, evidence)
         critique = await activities.critique(job, analysis, evidence)
 
+        # Findings are stored as soon as the critic has judged them, so a reviewer - and
+        # anyone reading the job while it waits - sees what is being decided.
+        record = partial(_record_findings, jobs, job, analysis, critique)
         if not critique.requires_reviewer:
+            await record(ReviewerStatus.NOT_REQUIRED)
             break
+        await record(ReviewerStatus.PENDING)
 
         job = await jobs.transition(job.tenant_id, job.id, JobStatus.REVIEW_REQUIRED)
         review_started = utc_now()
@@ -219,8 +254,10 @@ async def _run_research_job(
         )
 
         if decision is ReviewerDecision.APPROVE:
+            await record(ReviewerStatus.APPROVED)
             break
         if decision is ReviewerDecision.REJECT:
+            await record(ReviewerStatus.REJECTED)
             job = await jobs.transition(
                 job.tenant_id, job.id, JobStatus.FAILED, "rejected by the reviewer"
             )
@@ -262,11 +299,18 @@ async def _run_research_job(
             for identifier in sorted(missing_citations, key=str)
         ),
     ]
+    # Exported before the job is given its final status: a job is not called complete
+    # while its report and manifest are still unwritten.
+    publication = (
+        await activities.publish(job, report, shortfalls)
+        if activities.publish is not None
+        else None
+    )
     if shortfalls:
         job = await jobs.transition(job.tenant_id, job.id, JobStatus.PARTIAL, "; ".join(shortfalls))
     else:
         job = await jobs.transition(job.tenant_id, job.id, JobStatus.COMPLETED)
-    return ResearchOutcome(job=job, report=report, evidence=evidence)
+    return ResearchOutcome(job=job, report=report, evidence=evidence, publication=publication)
 
 
 async def _collect_evidence(
