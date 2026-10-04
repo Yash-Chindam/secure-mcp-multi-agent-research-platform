@@ -208,9 +208,24 @@ Set `RESEARCH_ARTIFACT_ENDPOINT`, `RESEARCH_ARTIFACT_ACCESS_KEY`, `RESEARCH_ARTI
 and optionally `RESEARCH_ARTIFACT_BUCKET` to use MinIO or another S3-compatible store. Without
 them artifacts stay in process memory, which an API process cannot read back from a worker.
 
+### Budgets and usage
+
+A job has four budgets: tool calls, tokens, estimated cost and working time. Tool calls are
+claimed before each call. The other three are checked before each agent call, so a job that has
+spent one is refused new work and ends `partial` with the reason (or `failed`, if it had found
+nothing yet). Time spent waiting for a reviewer is not counted.
+
+```json
+{"question": "...", "budget": {"max_tool_calls": 50, "max_tokens": 2000000,
+                               "max_cost_usd": 10.0, "max_runtime_seconds": 3600}}
+```
+
+`GET /api/v1/jobs/{id}` returns `usage`: what the job has spent so far. Cost is an estimate from
+the provider's reported token counts and `RESEARCH_LLM_INPUT_COST_PER_MILLION_USD` /
+`RESEARCH_LLM_OUTPUT_COST_PER_MILLION_USD`, which should match the model in `RESEARCH_AGENT_LLM`.
+
 ## Next milestones
 
-1. Token and cost accounting per job, retry counts and circuit-state metrics (section 13).
-2. Redis-backed rate limits and budgets shared across workers (section 6).
-3. The remaining section 14 evaluations: cross-tenant prevention, task completion, cost and time.
-4. Review, report and audit views in the requester interface.
+1. Redis-backed rate limits and budgets shared across workers (section 6).
+2. The remaining section 14 evaluations: cross-tenant prevention, task completion, cost and time.
+3. Review, report and audit views in the requester interface.

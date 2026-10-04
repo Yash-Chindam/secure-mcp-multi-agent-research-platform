@@ -3,6 +3,7 @@
 from uuid import UUID, uuid4
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 from research_platform.agents.contracts import (
     AnalysisResult,
@@ -146,6 +147,19 @@ async def test_a_step_that_cannot_be_completed_ends_the_job_as_failed_with_the_r
     stored = service.get(TENANT, job.id)
     assert stored.status is JobStatus.FAILED
     assert stored.status_detail == outcome.failure
+
+
+async def test_a_failure_that_crossed_an_activity_boundary_is_named_once() -> None:
+    """Temporal's wrapper already renders as "Type: message"; the reason must not double it."""
+    service, job = started()
+    crew = Crew()
+    crew.analyze_error = ApplicationError(
+        "the model provider refused the request", type="ProviderRefused"
+    )
+
+    outcome = await run_research_job(job, jobs=AsyncJobs(service), activities=crew.activities)
+
+    assert outcome.failure == "ProviderRefused: the model provider refused the request"
 
 
 async def test_a_failure_in_the_very_first_step_still_ends_the_job_as_failed() -> None:

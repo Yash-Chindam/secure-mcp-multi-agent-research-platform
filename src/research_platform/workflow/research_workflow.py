@@ -14,6 +14,7 @@ open while a person is away (section 12).
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any, cast
 from uuid import UUID
 
 from temporalio import workflow
@@ -36,6 +37,7 @@ from research_platform.domain.models import (
     ResearchJob,
 )
 from research_platform.domain.tasks import ResearchTask
+from research_platform.observability.metrics import PlatformMetrics, get_metrics
 from research_platform.workflow.orchestration import (
     OrchestrationActivities,
     ResearchOutcome,
@@ -51,13 +53,15 @@ AGENT_ACTIVITY_TIMEOUT = timedelta(minutes=10)
 run before Temporal considers the activity itself to have failed."""
 
 AGENT_RETRY_POLICY = RetryPolicy(
-    maximum_attempts=3, non_retryable_error_types=["SchemaCorrectionExhausted"]
+    maximum_attempts=3,
+    non_retryable_error_types=["SchemaCorrectionExhausted", "BudgetExhausted"],
 )
 """Temporal's own retry, for a transient failure such as a dropped connection to the LLM
 provider. The bounded schema-correction retries inside the activity are separate and
 much narrower (section 12) - this is not a second copy of that budget, so an agent that
 already spent its corrections is not run again: the same model given the same prompt
-would be refused the same way, three more times over."""
+would be refused the same way, three more times over. Nor is a job that has spent its
+budget: trying again is exactly the new work the budget exists to stop."""
 
 JOB_ACTIVITY_TIMEOUT = timedelta(seconds=30)
 """Persisting a status transition or a piece of evidence is local, fast persistence."""
@@ -73,6 +77,39 @@ attempt limit - until its schedule-to-close timeout elapses. Leaving that defaul
 place turns any persistently failing call (a bug, not a transient blip) into an
 unbounded retry storm rather than a clean failure, which is exactly the runaway behavior
 section 12 asks every bounded retry in this platform to avoid."""
+
+
+class _LiveOnly:
+    """One instrument that records only when the workflow is running for the first time."""
+
+    def __init__(self, instrument: Any) -> None:
+        self._instrument = instrument
+
+    def add(self, amount: float, attributes: dict[str, Any] | None = None) -> None:
+        if not workflow.unsafe.is_replaying():
+            self._instrument.add(amount, attributes)
+
+    def record(self, amount: float, attributes: dict[str, Any] | None = None) -> None:
+        if not workflow.unsafe.is_replaying():
+            self._instrument.record(amount, attributes)
+
+
+class ReplaySafeMetrics:
+    """The platform metrics, as a workflow may use them.
+
+    Temporal re-runs a workflow's code from history whenever a worker picks it up
+    again. Without this, every replay would count the same task completion, reviewer
+    wait and finished job a second time. ``active_jobs`` is the exception and is left
+    as it is: it counts the workflows this worker currently holds, so a replay that
+    brings a job back into a worker is exactly when it should go up again.
+    """
+
+    def __init__(self, metrics: PlatformMetrics) -> None:
+        self._metrics = metrics
+        self.active_jobs = metrics.active_jobs
+
+    def __getattr__(self, name: str) -> Any:
+        return _LiveOnly(getattr(self._metrics, name))
 
 
 @workflow.defn(name="ResearchJobWorkflow", sandboxed=False)
@@ -108,7 +145,12 @@ class ResearchJobWorkflow:
             await_reviewer_decision=self._await_reviewer_decision,
             publish=self._publish,
         )
-        return await run_research_job(job, jobs=self, activities=activities)
+        return await run_research_job(
+            job,
+            jobs=self,
+            activities=activities,
+            metrics=cast(PlatformMetrics, ReplaySafeMetrics(get_metrics())),
+        )
 
     # -- JobsPort, backed by durable activities --
 

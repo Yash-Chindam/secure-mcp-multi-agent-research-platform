@@ -79,9 +79,36 @@ def clearance_covers(clearance: AccessClass, required: AccessClass) -> bool:
 
 
 class ResearchBudget(BaseModel):
+    """The four limits section 10 gives a job: tool calls, tokens, money and time."""
+
     max_tool_calls: int = Field(default=50, ge=1, le=10_000)
-    max_runtime_seconds: int = Field(default=3_600, ge=30, le=86_400)
+    max_tokens: int = Field(default=2_000_000, ge=1_000, le=1_000_000_000)
+    max_runtime_seconds: int = Field(
+        default=3_600,
+        ge=30,
+        le=86_400,
+        description="Time agents may spend working. Time spent waiting for a reviewer "
+        "is not counted.",
+    )
     max_cost_usd: float = Field(default=10.0, gt=0, le=10_000)
+
+
+class JobUsage(BaseModel):
+    """What a job has spent so far against its budget."""
+
+    tool_calls: int = Field(default=0, ge=0)
+    agent_calls: int = Field(default=0, ge=0)
+    schema_corrections: int = Field(default=0, ge=0)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    cost_usd: float = Field(
+        default=0.0, ge=0, description="Estimated from token counts and the configured price."
+    )
+    active_seconds: float = Field(default=0.0, ge=0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
 
 class ResearchJobCreate(BaseModel):
@@ -104,6 +131,7 @@ class ResearchJob(BaseModel):
         description="The most sensitive data class this job's agents may reach: the "
         "clearance of the requester who created it, never more.",
     )
+    usage: JobUsage = Field(default_factory=JobUsage)
     status: JobStatus = JobStatus.CREATED
     status_detail: str | None = Field(
         default=None,
@@ -124,14 +152,21 @@ class ResearchJob(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
-    def transition_to(self, target: JobStatus, detail: str | None = None) -> ResearchJob:
-        """Move to a new status, replacing any explanation the previous one carried."""
+    def transition_to(
+        self, target: JobStatus, detail: str | None = None, usage: JobUsage | None = None
+    ) -> ResearchJob:
+        """Move to a new status, replacing any explanation the previous one carried.
+
+        ``usage`` is what the job has spent by the time it reaches the new status; left
+        out, the figure already on the job is kept.
+        """
         if target not in ALLOWED_TRANSITIONS[self.status]:
             raise InvalidStateTransition(self.status, target)
         return self.model_copy(
             update={
                 "status": target,
                 "status_detail": detail[:STATUS_DETAIL_LIMIT] if detail else None,
+                "usage": usage if usage is not None else self.usage,
                 "updated_at": utc_now(),
             }
         )

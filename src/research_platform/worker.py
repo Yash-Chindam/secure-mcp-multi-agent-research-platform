@@ -25,6 +25,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from research_platform.agents.crew import build_agent
+from research_platform.agents.usage import TokenPricing
 from research_platform.application.jobs import ResearchJobService
 from research_platform.composition import (
     build_artifact_store,
@@ -35,12 +36,13 @@ from research_platform.composition import (
     describe_persistence,
 )
 from research_platform.domain.invocations import ErrorClass
+from research_platform.mcp.breaker import BudgetLedger
 from research_platform.mcp.catalogue import DEFAULT_CAPABILITIES
 from research_platform.mcp.fastmcp_executor import FastMCPExecutor
 from research_platform.mcp.gateway import CapabilityExecutor, ExecutionRequest, UpstreamError
 from research_platform.mcp.registry import CapabilityRegistry
 from research_platform.mcp.servers.configured import configure_servers
-from research_platform.observability.metrics import configure_metrics
+from research_platform.observability.metrics import configure_metrics, get_metrics
 from research_platform.observability.tracing import configure_tracing
 from research_platform.settings import Settings, load_settings
 from research_platform.workflow.activities import JobActivities, ResearchActivities
@@ -107,18 +109,29 @@ def build_research_activities(
         registry=registry,
         audit=jobs.record_invocation if jobs is not None else None,
     )
+    get_metrics().observe_circuits(gateway.breaker.states)
     return ResearchActivities(
         gateway=gateway,
         registry=registry,
         build_agent=lambda role, tools: build_agent(role, llm=settings.agent_llm, tools=tools),
+        pricing=TokenPricing(
+            input_per_million_usd=settings.llm_input_cost_per_million_usd,
+            output_per_million_usd=settings.llm_output_cost_per_million_usd,
+        ),
     )
 
 
 def build_job_activities(
-    settings: Settings, jobs: ResearchJobService | None = None
+    settings: Settings,
+    jobs: ResearchJobService | None = None,
+    budgets: BudgetLedger | None = None,
 ) -> JobActivities:
-    """The activities that persist status transitions and evidence."""
-    return JobActivities(jobs=jobs or build_job_service(settings))
+    """The activities that persist status transitions, evidence and findings.
+
+    Given the ledger the agents spend against, each stored status also carries what the
+    job had spent by then.
+    """
+    return JobActivities(jobs=jobs or build_job_service(settings), budgets=budgets)
 
 
 def build_publication_activities(
@@ -176,7 +189,7 @@ async def run(settings: Settings | None = None) -> None:
 
     jobs = build_job_service(settings)
     research_activities = build_research_activities(settings, jobs)
-    job_activities = build_job_activities(settings, jobs)
+    job_activities = build_job_activities(settings, jobs, research_activities.gateway.budgets)
     publication_activities = build_publication_activities(settings, jobs, research_activities)
 
     worker = Worker(

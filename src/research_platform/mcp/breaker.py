@@ -9,7 +9,7 @@ from enum import StrEnum
 from threading import RLock
 from uuid import UUID
 
-from research_platform.domain.models import ResearchBudget, utc_now
+from research_platform.domain.models import JobUsage, ResearchBudget, utc_now
 
 Clock = Callable[[], datetime]
 
@@ -28,10 +28,13 @@ class CircuitOpen(RuntimeError):
 
 
 class BudgetExhausted(RuntimeError):
-    def __init__(self, job_id: UUID, limit: int) -> None:
-        super().__init__(f"job {job_id} reached its {limit} tool-call budget")
+    """A job has spent one of its four budgets, so no new work is started for it."""
+
+    def __init__(self, job_id: UUID, limit: float, kind: str = "tool-call") -> None:
+        super().__init__(f"job {job_id} reached its {limit:g} {kind} budget")
         self.job_id = job_id
         self.limit = limit
+        self.kind = kind
 
 
 @dataclass
@@ -62,6 +65,11 @@ class CircuitBreaker:
     def state_of(self, server: str) -> CircuitState:
         with self._lock:
             return self._refresh(server).state
+
+    def states(self) -> dict[str, CircuitState]:
+        """The current state of every server this breaker has seen a call for."""
+        with self._lock:
+            return {server: self._refresh(server).state for server in list(self._circuits)}
 
     def ensure_closed(self, server: str) -> None:
         """Raise when the server is being rested, without consuming an upstream call."""
@@ -100,23 +108,22 @@ class CircuitBreaker:
         return circuit
 
 
-@dataclass
-class BudgetUsage:
-    tool_calls: int = 0
-    cost_usd: float = 0.0
-
-
 class BudgetLedger:
-    """Count tool calls per job so an exhausted budget stops new work (section 12)."""
+    """What each job has spent, so an exhausted budget stops new work (section 12).
+
+    Tool calls are claimed before a call is made, so that budget is never exceeded.
+    Tokens, cost and working time are only known once an agent call has finished, so
+    they are checked before the next one starts: a job may overshoot by the call that
+    crossed the line, and is then refused any further agent work.
+    """
 
     def __init__(self) -> None:
-        self._usage: dict[UUID, BudgetUsage] = {}
+        self._usage: dict[UUID, JobUsage] = {}
         self._lock = RLock()
 
-    def usage(self, job_id: UUID) -> BudgetUsage:
+    def usage(self, job_id: UUID) -> JobUsage:
         with self._lock:
-            recorded = self._usage.get(job_id, BudgetUsage())
-        return BudgetUsage(tool_calls=recorded.tool_calls, cost_usd=recorded.cost_usd)
+            return self._usage.get(job_id, JobUsage()).model_copy()
 
     def remaining_calls(self, job_id: UUID, budget: ResearchBudget) -> int:
         return max(0, budget.max_tool_calls - self.usage(job_id).tool_calls)
@@ -124,17 +131,50 @@ class BudgetLedger:
     def reserve_call(self, job_id: UUID, budget: ResearchBudget) -> int:
         """Claim one tool call, refusing once the job has spent its allowance."""
         with self._lock:
-            recorded = self._usage.setdefault(job_id, BudgetUsage())
+            recorded = self._usage.setdefault(job_id, JobUsage())
             if recorded.tool_calls >= budget.max_tool_calls:
                 raise BudgetExhausted(job_id, budget.max_tool_calls)
             recorded.tool_calls += 1
             return recorded.tool_calls
 
+    def ensure_within(self, job_id: UUID, budget: ResearchBudget) -> None:
+        """Refuse new agent work for a job that has spent its tokens, money or time."""
+        spent = self.usage(job_id)
+        if spent.total_tokens >= budget.max_tokens:
+            raise BudgetExhausted(job_id, budget.max_tokens, "token")
+        if spent.cost_usd >= budget.max_cost_usd:
+            raise BudgetExhausted(job_id, budget.max_cost_usd, "USD cost")
+        if spent.active_seconds >= budget.max_runtime_seconds:
+            raise BudgetExhausted(job_id, budget.max_runtime_seconds, "second runtime")
+
+    def record_agent_call(
+        self,
+        job_id: UUID,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cost_usd: float = 0.0,
+        active_seconds: float = 0.0,
+        corrections: int = 0,
+    ) -> JobUsage:
+        """Add what one finished agent call spent, and return the job's new total."""
+        if min(prompt_tokens, completion_tokens, cost_usd, active_seconds, corrections) < 0:
+            raise ValueError("recorded usage cannot be negative")
+        with self._lock:
+            recorded = self._usage.setdefault(job_id, JobUsage())
+            recorded.agent_calls += 1
+            recorded.schema_corrections += corrections
+            recorded.prompt_tokens += prompt_tokens
+            recorded.completion_tokens += completion_tokens
+            recorded.cost_usd += cost_usd
+            recorded.active_seconds += active_seconds
+            return recorded.model_copy()
+
     def record_cost(self, job_id: UUID, cost_usd: float) -> None:
         if cost_usd < 0:
             raise ValueError("recorded cost cannot be negative")
         with self._lock:
-            self._usage.setdefault(job_id, BudgetUsage()).cost_usd += cost_usd
+            self._usage.setdefault(job_id, JobUsage()).cost_usd += cost_usd
 
 
 @dataclass

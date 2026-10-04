@@ -21,6 +21,9 @@ data:
   RESEARCH_MCP_CLIENT_ID: {{ .Values.settings.mcpClientId | quote }}
   RESEARCH_ARTIFACT_ENDPOINT: {{ tpl .Values.settings.artifactEndpoint . | quote }}
   RESEARCH_ARTIFACT_BUCKET: {{ .Values.settings.artifactBucket | quote }}
+  RESEARCH_AGENT_LLM: {{ .Values.settings.agentLlm | quote }}
+  RESEARCH_LLM_INPUT_COST_PER_MILLION_USD: {{ .Values.settings.llmInputCostPerMillionUsd | quote }}
+  RESEARCH_LLM_OUTPUT_COST_PER_MILLION_USD: {{ .Values.settings.llmOutputCostPerMillionUsd | quote }}
   {{- $urls := list }}
   {{- range .Values.mcpServers }}
   {{- $urls = append $urls (printf "%s=http://%s-mcp-%s:%v/mcp" .name (include "research-platform.fullname" $) .name (.port | default 8000)) }}

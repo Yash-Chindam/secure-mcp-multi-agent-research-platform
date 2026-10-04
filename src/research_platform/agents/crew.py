@@ -27,6 +27,7 @@ from research_platform.agents.contracts import (
     ResearchReport,
 )
 from research_platform.agents.provenance import EvidenceClaims
+from research_platform.agents.usage import AgentCallStats
 from research_platform.agents.validation import DEFAULT_MAX_ATTEMPTS, BoundedSchemaCorrection
 from research_platform.domain.tasks import AgentRole
 
@@ -144,11 +145,14 @@ def request_agent_output(
     instructions: str,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     verify: Callable[[Any], object] | None = None,
+    stats: AgentCallStats | None = None,
 ) -> BaseModel:
     """Ask an agent for its contract, correcting an invalid response a bounded number of times.
 
     ``verify`` rejects a well-formed response whose references are not real (see
-    ``research_platform.agents.checks``), under the same attempt budget.
+    ``research_platform.agents.checks``), under the same attempt budget. ``stats``
+    is filled in with every attempt made and the tokens each one used, whether or not
+    the call succeeds in the end.
 
     Raises ``SchemaCorrectionExhausted`` when the agent cannot produce a conforming
     response within the attempt budget, so the caller can reject the state transition
@@ -172,6 +176,8 @@ def request_agent_output(
             raise TypeError(
                 "agent.kickoff returned a coroutine; call it from inside a CrewAI Flow instead"
             )
+        if stats is not None:
+            stats.observe(output.usage_metrics)
         return output.raw
 
     return correction.resolve(spec.contract, produce, verify)

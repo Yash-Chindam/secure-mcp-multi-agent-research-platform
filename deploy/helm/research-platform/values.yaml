@@ -49,6 +49,12 @@ settings:
   artifactAccessKey: "research"
   artifactSecretKey: "research-artifacts"
   otelExporterOtlpEndpoint: "http://{{ .Release.Name }}-opentelemetry-collector:4318"
+  # The model agents run on, and its price in USD per million tokens. The price is what
+  # a job's estimated cost - and so its cost budget - is computed from; keep it in step
+  # with the model.
+  agentLlm: "gpt-4o-mini"
+  llmInputCostPerMillionUsd: 0.15
+  llmOutputCostPerMillionUsd: 0.60
 
 # Name of a pre-created Secret holding any RESEARCH_*-prefixed secret values (none are
 # required by default: the platform runs on dev identity headers and no external policy

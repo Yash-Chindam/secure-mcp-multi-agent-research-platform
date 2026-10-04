@@ -40,6 +40,7 @@ from research_platform.domain.models import (
     EvidenceRecord,
     FindingRecord,
     JobStatus,
+    JobUsage,
     ResearchBudget,
     ResearchJob,
     ReviewerStatus,
@@ -203,6 +204,33 @@ def test_a_status_change_never_alters_a_jobs_clearance(repository: JobRepository
     repository.update(job.transition_to(JobStatus.PLANNING))
 
     assert repository.get(job.tenant_id, job.id).clearance is AccessClass.INTERNAL
+
+
+def test_a_job_starts_with_nothing_spent_and_keeps_what_a_transition_records(
+    repository: JobRepository,
+) -> None:
+    job = repository.add(a_job())
+    spent = JobUsage(
+        tool_calls=3,
+        agent_calls=4,
+        schema_corrections=1,
+        prompt_tokens=1_200,
+        completion_tokens=300,
+        cost_usd=0.0125,
+        active_seconds=41.5,
+    )
+
+    repository.update(job.transition_to(JobStatus.PLANNING, usage=spent))
+
+    assert job.usage == JobUsage()
+    assert repository.get(job.tenant_id, job.id).usage == spent
+    assert repository.list(job.tenant_id)[0].usage == spent
+
+
+def test_a_token_budget_is_stored_with_the_job(repository: JobRepository) -> None:
+    job = repository.add(a_job().model_copy(update={"budget": ResearchBudget(max_tokens=250_000)}))
+
+    assert repository.get(job.tenant_id, job.id).budget.max_tokens == 250_000
 
 
 def test_a_job_is_never_readable_by_another_tenant(repository: JobRepository) -> None:
