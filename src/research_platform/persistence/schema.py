@@ -68,6 +68,7 @@ _JOBS = (
     # Added after the table first shipped; applied in place so an existing database is
     # brought forward by the same idempotent statements a new one is created with.
     "ALTER TABLE research_jobs ADD COLUMN IF NOT EXISTS status_detail TEXT",
+    "ALTER TABLE research_jobs ADD COLUMN IF NOT EXISTS clearance TEXT NOT NULL DEFAULT 'public'",
 )
 
 _EVIDENCE = (
@@ -173,6 +174,10 @@ _PUBLICATIONS = (
             REFERENCES research_jobs (tenant_id, id) ON DELETE CASCADE
     )
     """,
+    "ALTER TABLE report_publications "
+    "ADD COLUMN IF NOT EXISTS report_access_class TEXT NOT NULL DEFAULT 'public'",
+    "ALTER TABLE report_publications "
+    "ADD COLUMN IF NOT EXISTS manifest_access_class TEXT NOT NULL DEFAULT 'public'",
 )
 
 

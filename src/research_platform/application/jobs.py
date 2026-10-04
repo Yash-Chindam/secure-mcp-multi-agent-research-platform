@@ -18,6 +18,7 @@ from uuid import UUID
 from research_platform.application.publication import ReportPublication
 from research_platform.domain.invocations import ToolInvocation
 from research_platform.domain.models import (
+    AccessClass,
     EvidenceRecord,
     EvidenceRecordCreate,
     Finding,
@@ -176,10 +177,23 @@ class ResearchJobService:
     def __init__(self, repository: JobRepository) -> None:
         self._repository = repository
 
-    def create(self, tenant_id: str, requester_id: str, command: ResearchJobCreate) -> ResearchJob:
+    def create(
+        self,
+        tenant_id: str,
+        requester_id: str,
+        command: ResearchJobCreate,
+        clearance: AccessClass = AccessClass.PUBLIC,
+    ) -> ResearchJob:
+        """Record a job, with the clearance its agents will act under.
+
+        The clearance is the requester's own, fixed when the job is created: agents work
+        on the requester's behalf, so they may reach what the requester may reach and
+        nothing a later caller happens to be cleared for.
+        """
         job = ResearchJob(
             tenant_id=tenant_id,
             requester_id=requester_id,
+            clearance=clearance,
             **command.model_dump(),
         )
         return self._repository.add(job)

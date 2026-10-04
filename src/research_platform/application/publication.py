@@ -207,6 +207,16 @@ class ReportPublication(BaseModel):
     report_sha256: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     is_partial: bool
     drifted_evidence_ids: list[UUID] = Field(default_factory=list)
+    report_access_class: AccessClass = Field(
+        default=AccessClass.PUBLIC,
+        description="The most sensitive class of evidence the report cites; a reader "
+        "needs at least this clearance.",
+    )
+    manifest_access_class: AccessClass = Field(
+        default=AccessClass.PUBLIC,
+        description="The most sensitive class of evidence the manifest lists, cited or "
+        "not, since it names every source the job read.",
+    )
 
 
 def sha256_of(data: bytes) -> str:

@@ -187,6 +187,24 @@ def test_a_stored_job_comes_back_with_every_field_it_was_given(repository: JobRe
     assert loaded.created_at == job.created_at
 
 
+@pytest.mark.parametrize("clearance", list(AccessClass))
+def test_a_job_keeps_the_clearance_it_was_created_with(
+    repository: JobRepository, clearance: AccessClass
+) -> None:
+    job = repository.add(a_job().model_copy(update={"clearance": clearance}))
+
+    assert repository.get(job.tenant_id, job.id).clearance is clearance
+    assert repository.list(job.tenant_id)[0].clearance is clearance
+
+
+def test_a_status_change_never_alters_a_jobs_clearance(repository: JobRepository) -> None:
+    job = repository.add(a_job().model_copy(update={"clearance": AccessClass.INTERNAL}))
+
+    repository.update(job.transition_to(JobStatus.PLANNING))
+
+    assert repository.get(job.tenant_id, job.id).clearance is AccessClass.INTERNAL
+
+
 def test_a_job_is_never_readable_by_another_tenant(repository: JobRepository) -> None:
     job = repository.add(a_job(tenant_id="tenant-a"))
 
@@ -411,6 +429,25 @@ def test_a_publication_round_trips_with_its_keys_and_drifted_sources(
     assert stored.report_sha256 == f"sha256:{'c' * 64}"
     assert stored.is_partial is True
     assert stored.drifted_evidence_ids == [drifted]
+
+
+def test_a_publication_keeps_the_classification_of_its_report_and_manifest(
+    repository: JobRepository,
+) -> None:
+    job = repository.add(a_job())
+
+    repository.record_publication(
+        a_publication(
+            job,
+            report_access_class=AccessClass.INTERNAL,
+            manifest_access_class=AccessClass.RESTRICTED,
+        )
+    )
+
+    stored = repository.get_publication(job.tenant_id, job.id)
+    assert stored is not None
+    assert stored.report_access_class is AccessClass.INTERNAL
+    assert stored.manifest_access_class is AccessClass.RESTRICTED
 
 
 def test_a_job_that_has_not_published_has_no_publication(repository: JobRepository) -> None:

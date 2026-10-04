@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 
 _JOB_COLUMNS = """
     id, tenant_id, requester_id, question, constraints, source_requirements,
-    budget, status, status_detail, workflow_id, workflow_run_id, created_at, updated_at
+    budget, clearance, status, status_detail, workflow_id, workflow_run_id, created_at,
+    updated_at
 """
 
 _EVIDENCE_COLUMNS = """
@@ -62,7 +63,8 @@ _FINDING_COLUMNS = """
 
 _PUBLICATION_COLUMNS = """
     tenant_id, job_id, published_at, report_key, markdown_key, manifest_key, evidence_key,
-    report_sha256, is_partial, drifted_evidence_ids
+    report_sha256, is_partial, drifted_evidence_ids, report_access_class,
+    manifest_access_class
 """
 
 
@@ -119,7 +121,8 @@ class PostgresJobRepository:
                 INSERT INTO research_jobs ({_JOB_COLUMNS})
                 VALUES (
                     %(id)s, %(tenant_id)s, %(requester_id)s, %(question)s, %(constraints)s,
-                    %(source_requirements)s, %(budget)s, %(status)s, %(status_detail)s,
+                    %(source_requirements)s, %(budget)s, %(clearance)s, %(status)s,
+                    %(status_detail)s,
                     %(workflow_id)s, %(workflow_run_id)s, %(created_at)s, %(updated_at)s
                 )
                 """,
@@ -311,7 +314,8 @@ class PostgresJobRepository:
                 VALUES (
                     %(tenant_id)s, %(job_id)s, %(published_at)s, %(report_key)s,
                     %(markdown_key)s, %(manifest_key)s, %(evidence_key)s,
-                    %(report_sha256)s, %(is_partial)s, %(drifted)s
+                    %(report_sha256)s, %(is_partial)s, %(drifted)s,
+                    %(report_access_class)s, %(manifest_access_class)s
                 )
                 ON CONFLICT (tenant_id, job_id) DO UPDATE SET
                     published_at = EXCLUDED.published_at,
@@ -321,11 +325,15 @@ class PostgresJobRepository:
                     evidence_key = EXCLUDED.evidence_key,
                     report_sha256 = EXCLUDED.report_sha256,
                     is_partial = EXCLUDED.is_partial,
-                    drifted_evidence_ids = EXCLUDED.drifted_evidence_ids
+                    drifted_evidence_ids = EXCLUDED.drifted_evidence_ids,
+                    report_access_class = EXCLUDED.report_access_class,
+                    manifest_access_class = EXCLUDED.manifest_access_class
                 """,
                 {
                     **publication.model_dump(exclude={"drifted_evidence_ids"}),
                     "drifted": Jsonb([str(item) for item in publication.drifted_evidence_ids]),
+                    "report_access_class": publication.report_access_class.value,
+                    "manifest_access_class": publication.manifest_access_class.value,
                 },
             )
         return publication
@@ -391,6 +399,7 @@ def _job_parameters(job: ResearchJob) -> dict[str, Any]:
         "constraints": Jsonb(job.constraints),
         "source_requirements": Jsonb(job.source_requirements),
         "budget": Jsonb(job.budget.model_dump()),
+        "clearance": job.clearance.value,
         "status": job.status.value,
         "status_detail": job.status_detail,
         "workflow_id": job.workflow_id,
