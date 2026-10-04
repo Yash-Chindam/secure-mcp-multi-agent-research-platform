@@ -8,6 +8,17 @@
 - The pipeline is now tested with real CrewAI agents and a canned model, under Temporal.
 - Circuit-breaker state is shared through Redis, so a server one worker has seen fail is rested
   by every worker.
+- The Docker Compose stack now verifies tokens and is bound by row-level security. Keycloak
+  imports a `research` realm with development accounts, the platform connects to PostgreSQL as a
+  non-superuser role, and the worker calls the MCP server with a service-account token.
+- The requester interface signs users in through the identity provider (authorization code with
+  PKCE) when one is configured. `GET /auth/config` tells it which mode is active.
+- Fixed: traces and metrics were posted to the collector's root path and rejected. Each signal now
+  goes to its own OTLP path.
+- Fixed: the worker could not start in the container image because its user had no home
+  directory.
+- Fixed: a served MCP server had no `/health` route, so its container was always reported
+  unhealthy.
 
 ## 0.9.0
 

@@ -45,8 +45,13 @@
 
       <details id="identity">
         <summary>Signed in as <span id="who"></span></summary>
-        <p class="muted">Development identity. When the platform verifies access tokens, paste one below and these fields are ignored.</p>
-        <div class="row">
+        <div id="sso" hidden>
+          <p class="muted">This platform verifies access tokens. Sign in with its identity provider.</p>
+          <button type="button" id="sign-in">Sign in</button>
+          <button type="button" class="quiet" id="sign-out" hidden>Sign out</button>
+        </div>
+        <p class="muted" id="dev-note">Development identity. When the platform verifies access tokens, paste one below and these fields are ignored.</p>
+        <div class="row" id="dev-identity">
           <div><label for="tenant">Tenant</label><input id="tenant" value="demo"></div>
           <div><label for="requester">User</label><input id="requester" value="local-user"></div>
           <div>
@@ -124,9 +129,11 @@
       const message = $("#message");
       const ACTIVE = new Set(["created", "planning", "researching", "analyzing", "review_required", "reporting"]);
       let openJobId = null;
+      let auth = {mode: "development-headers"};
+      let session = null;
 
       function headers() {
-        const token = $("#token").value.trim();
+        const token = session ? session.access_token : $("#token").value.trim();
         if (token) return {"Content-Type": "application/json", "Authorization": `Bearer ${token}`};
         return {
           "Content-Type": "application/json",
@@ -168,11 +175,107 @@
           `${usage.cost_usd.toFixed(4)} USD estimated · ${usage.agent_calls} agent calls`;
       }
 
+      function claimsOf(token) {
+        const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+        return JSON.parse(decodeURIComponent(escape(atob(payload))));
+      }
+
       function showIdentity() {
         const token = $("#token").value.trim();
-        $("#who").textContent = token
-          ? "a verified token"
-          : `${$("#requester").value} (${$("#role").value}, ${$("#clearance").value}) in ${$("#tenant").value}`;
+        if (session) {
+          const claims = claimsOf(session.access_token);
+          const roles = ((claims.realm_access || {}).roles || [])
+            .filter(role => ["requester", "reviewer", "administrator"].includes(role));
+          $("#who").textContent =
+            `${claims.preferred_username} (${roles.join(", ") || "no role"}, ` +
+            `${claims.clearance || "public"}) in ${claims.tenant_id}`;
+        } else if (auth.mode === "tokens") {
+          $("#who").textContent = token ? "a pasted token" : "nobody yet";
+        } else {
+          $("#who").textContent = token
+            ? "a verified token"
+            : `${$("#requester").value} (${$("#role").value}, ${$("#clearance").value}) in ${$("#tenant").value}`;
+        }
+        $("#sign-out").hidden = !session;
+        $("#sign-in").hidden = Boolean(session);
+      }
+
+      // Sign-in is the authorization code flow with PKCE: the password is typed into the
+      // identity provider, never into this page, and no client secret exists to leak.
+      function base64url(bytes) {
+        return btoa(String.fromCharCode(...new Uint8Array(bytes)))
+          .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      }
+
+      function endpoint(name) {
+        return `${auth.issuer}/protocol/openid-connect/${name}`;
+      }
+
+      async function signIn() {
+        const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+        const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+        sessionStorage.setItem("pkce", JSON.stringify({verifier, state}));
+        const query = new URLSearchParams({
+          response_type: "code",
+          client_id: auth.client_id,
+          redirect_uri: location.origin + "/",
+          scope: "openid",
+          state,
+          code_challenge: base64url(digest),
+          code_challenge_method: "S256",
+        });
+        location.assign(`${endpoint("auth")}?${query}`);
+      }
+
+      async function grant(form) {
+        const response = await fetch(endpoint("token"), {
+          method: "POST",
+          headers: {"Content-Type": "application/x-www-form-urlencoded"},
+          body: new URLSearchParams({client_id: auth.client_id, ...form}),
+        });
+        if (!response.ok) {
+          session = null;
+          say("Sign-in failed. Please sign in again.", true);
+          showIdentity();
+          return;
+        }
+        session = await response.json();
+        // Renew shortly before the access token expires, for as long as the page is open.
+        setTimeout(
+          () => session && grant({grant_type: "refresh_token", refresh_token: session.refresh_token}),
+          Math.max(5, session.expires_in - 30) * 1000,
+        );
+        showIdentity();
+      }
+
+      async function completeSignIn() {
+        const returned = new URLSearchParams(location.search);
+        const pending = JSON.parse(sessionStorage.getItem("pkce") || "null");
+        if (!returned.has("code") || !pending) return;
+        sessionStorage.removeItem("pkce");
+        history.replaceState(null, "", location.pathname);
+        if (returned.get("state") !== pending.state) {
+          say("Sign-in was not completed: the response did not match the request.", true);
+          return;
+        }
+        await grant({
+          grant_type: "authorization_code",
+          code: returned.get("code"),
+          redirect_uri: location.origin + "/",
+          code_verifier: pending.verifier,
+        });
+      }
+
+      async function configureIdentity() {
+        const response = await fetch("/auth/config");
+        if (response.ok) auth = await response.json();
+        const sso = auth.mode === "tokens" && Boolean(auth.client_id);
+        $("#sso").hidden = !sso;
+        $("#dev-identity").hidden = auth.mode === "tokens";
+        $("#dev-note").hidden = auth.mode === "tokens";
+        if (sso) await completeSignIn();
+        if (auth.mode === "tokens" && !session) $("#identity").open = true;
       }
 
       async function loadJobs() {
@@ -346,8 +449,20 @@
         if (cards.some(card => ACTIVE.has(card.className.replace("status ", "")))) await refresh();
       }, 5000);
 
-      showIdentity();
-      loadJobs();
+      $("#sign-in").addEventListener("click", signIn);
+      $("#sign-out").addEventListener("click", () => {
+        const idToken = session.id_token;
+        session = null;
+        const query = new URLSearchParams({
+          id_token_hint: idToken, post_logout_redirect_uri: location.origin + "/",
+        });
+        location.assign(`${endpoint("logout")}?${query}`);
+      });
+
+      configureIdentity().then(() => {
+        showIdentity();
+        if (auth.mode !== "tokens" || session || $("#token").value.trim()) loadJobs();
+      });
     </script>
   </body>
 </html>

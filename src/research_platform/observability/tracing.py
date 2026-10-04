@@ -55,7 +55,7 @@ def configure_tracing(
     provider = TracerProvider(resource=Resource.create({SERVICE_NAME: SERVICE}))
     exports = bool(settings.otel_exporter_otlp_endpoint)
     if exports:
-        exporter = OTLPSpanExporter(endpoint=settings.otel_exporter_otlp_endpoint)
+        exporter = OTLPSpanExporter(endpoint=settings.otlp_signal_endpoint("traces"))
         provider.add_span_processor(BatchSpanProcessor(exporter))
     if extra_exporter is not None:
         provider.add_span_processor(BatchSpanProcessor(extra_exporter))

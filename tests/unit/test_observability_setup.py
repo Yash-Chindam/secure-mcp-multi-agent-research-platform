@@ -1,3 +1,4 @@
+import pytest
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -69,3 +70,29 @@ def test_get_tracer_works_before_any_configuration() -> None:
 
 def test_get_metrics_returns_the_same_process_wide_instance() -> None:
     assert get_metrics() is get_metrics()
+
+
+@pytest.mark.parametrize(
+    ("configured", "signal", "expected"),
+    [
+        ("http://collector.test:4318", "traces", "http://collector.test:4318/v1/traces"),
+        ("http://collector.test:4318/", "metrics", "http://collector.test:4318/v1/metrics"),
+        (
+            "http://collector.test:4318/v1/traces",
+            "traces",
+            "http://collector.test:4318/v1/traces",
+        ),
+    ],
+)
+def test_each_signal_is_sent_to_its_own_path_on_the_collector(
+    configured: str, signal: str, expected: str
+) -> None:
+    """An exporter given a bare collector address posts to "/" and gets a 404."""
+    settings = Settings(otel_exporter_otlp_endpoint=configured)
+
+    assert settings.otlp_signal_endpoint(signal) == expected
+
+
+def test_a_signal_endpoint_needs_a_collector() -> None:
+    with pytest.raises(ValueError, match="no OTLP endpoint"):
+        Settings(otel_exporter_otlp_endpoint=None).otlp_signal_endpoint("traces")

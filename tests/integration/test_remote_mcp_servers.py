@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from starlette.testclient import TestClient
 
 from research_platform.domain.invocations import ErrorClass, InvocationOutcome
 from research_platform.domain.models import AccessClass, ResearchBudget
@@ -204,6 +205,22 @@ def test_a_server_built_without_an_issuer_says_it_accepts_any_caller(
 
     assert server.auth is None
     assert "any caller that can reach it is accepted" in caplog.text
+
+
+def test_a_served_server_answers_a_liveness_probe_without_a_token(workspace: Path) -> None:
+    """A container or pod probe carries no token; the tools themselves still need one."""
+    settings = Settings(
+        workspace_roots=f"acme={workspace}", oidc_issuer=ISSUER, oidc_audience=AUDIENCE
+    )
+    server = build_server("filesystem", settings)
+
+    with TestClient(server.http_app(path=MCP_PATH)) as probe:
+        health = probe.get("/health")
+        tools = probe.post(MCP_PATH, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok", "server": "filesystem"}
+    assert tools.status_code == 401
 
 
 def test_a_server_with_no_backend_configured_refuses_to_start() -> None:

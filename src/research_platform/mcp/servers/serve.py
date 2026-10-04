@@ -18,6 +18,8 @@ from collections.abc import Sequence
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from research_platform.composition import build_job_repository
 from research_platform.mcp.servers.configured import KNOWN_SERVERS, build_local_servers
@@ -43,6 +45,12 @@ def build_server(name: str, settings: Settings) -> FastMCP:
             f"{name} has no backend and boundary configured, so it was not started"
         )
     server = servers[name]
+
+    @server.custom_route("/health", methods=["GET"])
+    async def health(_request: Request) -> JSONResponse:
+        """Liveness for a container or pod probe. Says nothing about any tenant."""
+        return JSONResponse({"status": "ok", "server": name})
+
     if settings.tokens_are_verified:
         server.auth = JWTVerifier(
             jwks_uri=settings.jwks_uri,

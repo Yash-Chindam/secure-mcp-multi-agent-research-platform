@@ -174,3 +174,37 @@ def test_health_reports_that_tokens_are_verified(client: TestClient) -> None:
 
     assert body["status"] == "ok"
     assert "registry boundary" in body["authorization"]
+
+
+@pytest.mark.integration
+def test_the_interface_is_told_where_its_users_sign_in() -> None:
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        oidc_issuer=f"{ISSUER}/",
+        oidc_audience=AUDIENCE,
+        oidc_ui_client_id="research-ui",
+    )
+
+    with TestClient(create_app(settings)) as anonymous:
+        configuration = anonymous.get("/auth/config")
+
+    assert configuration.status_code == 200
+    assert configuration.json() == {"mode": "tokens", "issuer": ISSUER, "client_id": "research-ui"}
+
+
+@pytest.mark.integration
+def test_an_interface_with_no_client_registered_is_told_only_the_issuer() -> None:
+    settings = Settings(_env_file=None, oidc_issuer=ISSUER, oidc_audience=AUDIENCE)  # type: ignore[call-arg]
+
+    with TestClient(create_app(settings)) as anonymous:
+        configuration = anonymous.get("/auth/config")
+
+    assert configuration.json() == {"mode": "tokens", "issuer": ISSUER}
+
+
+@pytest.mark.integration
+def test_a_deployment_without_an_issuer_says_it_uses_development_headers() -> None:
+    with TestClient(create_app(Settings(_env_file=None))) as anonymous:  # type: ignore[call-arg]
+        configuration = anonymous.get("/auth/config")
+
+    assert configuration.json() == {"mode": "development-headers"}

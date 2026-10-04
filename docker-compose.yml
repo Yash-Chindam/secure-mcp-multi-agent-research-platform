@@ -11,17 +11,26 @@
 ## file has no equivalent for.
 ##
 ## The api and worker share one PostgreSQL system of record, so a status the worker
-## writes is visible to the API immediately. Both connect as the database owner here,
-## which bypasses the row-level security policies the schema installs - convenient for
-## local work, and reported as a warning at startup. See deploy/helm's README for the
-## restricted role a real deployment should connect as instead.
+## writes is visible to the API immediately. They connect as "research_app", a role
+## created on first start that owns the database but is not a superuser, so the
+## row-level security policies the schema installs bind it.
+##
+## Identity is verified: Keycloak imports the "research" realm from deploy/keycloak on
+## start, the API accepts only its access tokens, and the worker calls the web research
+## MCP server with a short-lived service token that server verifies. Sign in at
+## http://localhost:8000 as alice (requester), rita (reviewer) or adam (administrator);
+## each one's password is their name. olga belongs to a different tenant. These accounts
+## and the client secret in the realm file are for local development only.
+##
+## An existing postgres-data volume from before this role existed must be removed
+## (docker compose down -v) for the role to be created.
 ##
 ## Reports, provenance manifests and evidence bundles are exported to MinIO
 ## (console at http://localhost:9001, minioadmin/minioadmin); the bucket is created on
 ## first start.
 ##
-## First run: create a realm and client in Keycloak (http://localhost:8081, admin/admin)
-## - it is not auto-provisioned. Everything else works from a cold `docker compose up`.
+## Everything works from a cold `docker compose up`. Keycloak's own console is at
+## http://localhost:8081 (admin/admin).
 
 name: research-platform
 
@@ -35,7 +44,14 @@ x-app-environment: &app-environment
   RESEARCH_OPA_URL: http://opa:8181
   RESEARCH_TEMPORAL_TARGET_HOST: temporal:7233
   RESEARCH_WORKFLOWS_ENABLED: "true"
-  RESEARCH_DATABASE_URL: postgresql://research:research@postgres:5432/research_platform
+  RESEARCH_DATABASE_URL: postgresql://research_app:research_app@postgres:5432/research_platform
+  # Tokens name the address a browser reaches Keycloak at, so that is the issuer; the
+  # containers fetch signing keys and service tokens over the compose network instead.
+  RESEARCH_OIDC_ISSUER: http://localhost:8081/realms/research
+  RESEARCH_OIDC_AUDIENCE: research-platform
+  RESEARCH_OIDC_JWKS_URI: http://keycloak:8080/realms/research/protocol/openid-connect/certs
+  RESEARCH_OIDC_TOKEN_URL: http://keycloak:8080/realms/research/protocol/openid-connect/token
+  RESEARCH_OIDC_UI_CLIENT_ID: research-ui
   # Budgets and rate limits are counted in Redis so every worker and server replica
   # spends against one total.
   RESEARCH_REDIS_URL: redis://redis:6379/0
@@ -64,6 +80,8 @@ services:
         condition: service_started
       temporal:
         condition: service_started
+      keycloak:
+        condition: service_healthy
       opa:
         condition: service_started
       otel-collector:
@@ -73,12 +91,20 @@ services:
   worker:
     <<: *app-image
     command: ["python", "-m", "research_platform.worker"]
+    # The image's health check asks an HTTP port the worker does not have; a worker is
+    # healthy for as long as its process is running.
+    healthcheck:
+      disable: true
     environment:
       <<: *app-environment
       RESEARCH_MCP_SERVER_URLS: web-research=http://mcp-web-research:8000/mcp
+      RESEARCH_MCP_CLIENT_ID: research-gateway
+      RESEARCH_MCP_CLIENT_SECRET: research-gateway-development-secret
       # CrewAI reads the model provider key from the environment; without one the
       # agents cannot call a model and every job fails at planning.
+      RESEARCH_AGENT_LLM: ${RESEARCH_AGENT_LLM:-gpt-4o-mini}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,6 +114,8 @@ services:
         condition: service_started
       temporal:
         condition: service_started
+      keycloak:
+        condition: service_healthy
       opa:
         condition: service_started
       otel-collector:
@@ -97,9 +125,9 @@ services:
   # ---- MCP plane ----
   # The web research server runs as its own service over Streamable HTTP, the way
   # section 15 deploys it; the worker reaches it through RESEARCH_MCP_SERVER_URLS. The
-  # evidence server runs in process inside the worker. No token issuer is configured in
-  # this stack, so the server accepts any caller on the mcp network and says so at
-  # startup - the Helm chart is where service tokens are verified.
+  # evidence server runs in process inside the worker. The server verifies a bearer token
+  # on every request, which the worker obtains from Keycloak as the research-gateway
+  # client.
 
   mcp-web-research:
     <<: *app-image
@@ -109,6 +137,8 @@ services:
     depends_on:
       redis:
         condition: service_started
+      keycloak:
+        condition: service_healthy
     # On the data network only to reach Redis, where its request rate limit is counted.
     networks: [mcp, data, observability]
 
@@ -120,10 +150,13 @@ services:
       POSTGRES_DB: research_platform
       POSTGRES_USER: research
       POSTGRES_PASSWORD: research
+      APP_DB_USER: research_app
+      APP_DB_PASSWORD: research_app
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U research -d research_platform"]
       interval: 5s
@@ -201,13 +234,29 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
-    command: start-dev
+    command: start-dev --import-realm
     environment:
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # One issuer for every token, whichever address the request for it arrived on.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import:ro
     ports:
       - "8081:8080"
-    networks: [application]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"status": "UP"' <&3
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    networks: [application, mcp]
 
   opa:
     image: openpolicyagent/opa:1.11.0

@@ -73,6 +73,21 @@ def create_app(
             "metrics": metrics.description,
         }
 
+    @app.get("/auth/config", tags=["operations"])
+    def sign_in_configuration() -> dict[str, str]:
+        """Tell the requester interface how its users are identified.
+
+        Nothing here is secret: an issuer URL and a public client identifier are what
+        any browser-based client is configured with.
+        """
+        if not resolved.tokens_are_verified:
+            return {"mode": "development-headers"}
+        assert resolved.oidc_issuer is not None
+        configuration = {"mode": "tokens", "issuer": resolved.oidc_issuer.rstrip("/")}
+        if resolved.oidc_ui_client_id:
+            configuration["client_id"] = resolved.oidc_ui_client_id
+        return configuration
+
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index() -> str:
         return Path(__file__).with_name("web").joinpath("index.html").read_text(encoding="utf-8")
