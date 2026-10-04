@@ -129,6 +129,53 @@ _INVOCATIONS = (
 )
 
 
+_FINDINGS = (
+    """
+    CREATE TABLE IF NOT EXISTS findings (
+        id                         UUID             NOT NULL,
+        tenant_id                  TEXT             NOT NULL,
+        job_id                     UUID             NOT NULL,
+        claim                      TEXT             NOT NULL,
+        supporting_evidence_ids    JSONB            NOT NULL,
+        contradicting_evidence_ids JSONB            NOT NULL DEFAULT '[]'::jsonb,
+        calculation_ids            JSONB            NOT NULL DEFAULT '[]'::jsonb,
+        confidence                 DOUBLE PRECISION NOT NULL,
+        critic_verdict             TEXT             NOT NULL,
+        reviewer_status            TEXT             NOT NULL,
+        recorded_at                TIMESTAMPTZ      NOT NULL,
+        position                   INTEGER          NOT NULL,
+        PRIMARY KEY (tenant_id, id),
+        FOREIGN KEY (tenant_id, job_id)
+            REFERENCES research_jobs (tenant_id, id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS findings_by_job ON findings (tenant_id, job_id, position)
+    """,
+)
+
+
+_PUBLICATIONS = (
+    """
+    CREATE TABLE IF NOT EXISTS report_publications (
+        tenant_id            TEXT        NOT NULL,
+        job_id               UUID        NOT NULL,
+        published_at         TIMESTAMPTZ NOT NULL,
+        report_key           TEXT        NOT NULL,
+        markdown_key         TEXT        NOT NULL,
+        manifest_key         TEXT        NOT NULL,
+        evidence_key         TEXT        NOT NULL,
+        report_sha256        TEXT        NOT NULL,
+        is_partial           BOOLEAN     NOT NULL,
+        drifted_evidence_ids JSONB       NOT NULL DEFAULT '[]'::jsonb,
+        PRIMARY KEY (tenant_id, job_id),
+        FOREIGN KEY (tenant_id, job_id)
+            REFERENCES research_jobs (tenant_id, id) ON DELETE CASCADE
+    )
+    """,
+)
+
+
 SCHEMA_STATEMENTS: tuple[str, ...] = (
     *_JOBS,
     *_tenant_isolation("research_jobs"),
@@ -136,6 +183,10 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     *_tenant_isolation("evidence_records"),
     *_INVOCATIONS,
     *_tenant_isolation("tool_invocations"),
+    *_FINDINGS,
+    *_tenant_isolation("findings"),
+    *_PUBLICATIONS,
+    *_tenant_isolation("report_publications"),
 )
 """Every statement needed to bring an empty database up to the current schema.
 

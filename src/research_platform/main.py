@@ -4,12 +4,15 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
 from research_platform.api.routes import create_router
+from research_platform.application.artifacts import ArtifactStore
 from research_platform.application.jobs import ResearchJobService
 from research_platform.application.workflows import WorkflowStarter
 from research_platform.composition import (
+    build_artifact_store,
     build_job_repository,
     build_policy_stack,
     build_token_verifier,
+    describe_artifacts,
     describe_identity,
     describe_persistence,
 )
@@ -21,7 +24,9 @@ from research_platform.workflow.starter import TemporalWorkflowStarter
 
 
 def create_app(
-    settings: Settings | None = None, workflows: WorkflowStarter | None = None
+    settings: Settings | None = None,
+    workflows: WorkflowStarter | None = None,
+    artifacts: ArtifactStore | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Secure MCP Multi-Agent Research Platform",
@@ -30,6 +35,7 @@ def create_app(
     resolved = settings or load_settings()
     service = ResearchJobService(build_job_repository(resolved))
     registry = default_registry()
+    artifacts = artifacts or build_artifact_store(resolved)
     policy = build_policy_stack(resolved)
     tracing = configure_tracing(resolved)
     metrics = configure_metrics(resolved)
@@ -44,7 +50,8 @@ def create_app(
     app.state.policy_stack = policy
     app.state.token_verifier = build_token_verifier(resolved)
     app.state.workflows = workflows
-    app.include_router(create_router(service, registry, workflows))
+    app.state.artifacts = artifacts
+    app.include_router(create_router(service, registry, workflows, artifacts))
 
     @app.get("/health", tags=["operations"])
     def health() -> dict[str, str]:
@@ -54,6 +61,7 @@ def create_app(
             "identity": describe_identity(resolved),
             "authorization": policy.description,
             "persistence": describe_persistence(resolved),
+            "artifacts": describe_artifacts(resolved),
             "workflows": (
                 "each new job starts a durable workflow"
                 if workflows is not None

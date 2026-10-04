@@ -15,10 +15,13 @@ from threading import RLock
 from typing import Protocol
 from uuid import UUID
 
+from research_platform.application.publication import ReportPublication
 from research_platform.domain.invocations import ToolInvocation
 from research_platform.domain.models import (
     EvidenceRecord,
     EvidenceRecordCreate,
+    Finding,
+    FindingRecord,
     JobStatus,
     ResearchJob,
     ResearchJobCreate,
@@ -53,6 +56,16 @@ class JobRepository(Protocol):
 
     def list_invocations(self, tenant_id: str, job_id: UUID) -> builtins.list[ToolInvocation]: ...
 
+    def replace_findings(
+        self, tenant_id: str, job_id: UUID, findings: builtins.list[FindingRecord]
+    ) -> builtins.list[FindingRecord]: ...
+
+    def list_findings(self, tenant_id: str, job_id: UUID) -> builtins.list[FindingRecord]: ...
+
+    def record_publication(self, publication: ReportPublication) -> ReportPublication: ...
+
+    def get_publication(self, tenant_id: str, job_id: UUID) -> ReportPublication | None: ...
+
 
 class InMemoryJobRepository:
     """Development repository that enforces tenant isolation at every lookup."""
@@ -61,6 +74,8 @@ class InMemoryJobRepository:
         self._jobs: dict[tuple[str, UUID], ResearchJob] = {}
         self._evidence: dict[tuple[str, UUID], list[EvidenceRecord]] = {}
         self._invocations: dict[tuple[str, UUID], list[ToolInvocation]] = {}
+        self._findings: dict[tuple[str, UUID], list[FindingRecord]] = {}
+        self._publications: dict[tuple[str, UUID], ReportPublication] = {}
         self._lock = RLock()
 
     def add(self, job: ResearchJob) -> ResearchJob:
@@ -121,6 +136,41 @@ class InMemoryJobRepository:
             recorded = list(self._invocations.get((tenant_id, job_id), []))
         return sorted(recorded, key=lambda invocation: invocation.started_at)
 
+    def replace_findings(
+        self, tenant_id: str, job_id: UUID, findings: builtins.list[FindingRecord]
+    ) -> builtins.list[FindingRecord]:
+        """Store the job's current findings in place of whatever was recorded before.
+
+        Findings are re-derived each time the critic judges the analysis, and again when
+        a reviewer decides, so the stored set is the latest one rather than an
+        accumulation - which also makes a redelivered write harmless.
+        """
+        self.get(tenant_id, job_id)
+        with self._lock:
+            self._findings[(tenant_id, job_id)] = list(findings)
+        return findings
+
+    def list_findings(self, tenant_id: str, job_id: UUID) -> builtins.list[FindingRecord]:
+        self.get(tenant_id, job_id)
+        with self._lock:
+            return list(self._findings.get((tenant_id, job_id), []))
+
+    def record_publication(self, publication: ReportPublication) -> ReportPublication:
+        """Store where a job's report was published, replacing an earlier publication.
+
+        One job has one published report. Publishing again - a redelivered activity -
+        points the job at the same artifacts, so the latest record simply wins.
+        """
+        self.get(publication.tenant_id, publication.job_id)
+        with self._lock:
+            self._publications[(publication.tenant_id, publication.job_id)] = publication
+        return publication
+
+    def get_publication(self, tenant_id: str, job_id: UUID) -> ReportPublication | None:
+        self.get(tenant_id, job_id)
+        with self._lock:
+            return self._publications.get((tenant_id, job_id))
+
 
 class ResearchJobService:
     def __init__(self, repository: JobRepository) -> None:
@@ -173,6 +223,27 @@ class ResearchJobService:
         self.get(tenant_id, job_id)
         return self._repository.list_invocations(tenant_id, job_id)
 
+    def record_findings(
+        self, tenant_id: str, job_id: UUID, findings: builtins.list[Finding]
+    ) -> builtins.list[FindingRecord]:
+        """Store the job's current findings, replacing any earlier set."""
+        self.get(tenant_id, job_id)
+        records = [
+            FindingRecord(tenant_id=tenant_id, job_id=job_id, **finding.model_dump())
+            for finding in findings
+        ]
+        return self._repository.replace_findings(tenant_id, job_id, records)
+
+    def list_findings(self, tenant_id: str, job_id: UUID) -> builtins.list[FindingRecord]:
+        return self._repository.list_findings(tenant_id, job_id)
+
+    def record_publication(self, publication: ReportPublication) -> ReportPublication:
+        return self._repository.record_publication(publication)
+
+    def get_publication(self, tenant_id: str, job_id: UUID) -> ReportPublication | None:
+        """Where the job's report was published, or ``None`` if it has not been."""
+        return self._repository.get_publication(tenant_id, job_id)
+
 
 class AsyncJobs:
     """Adapts the synchronous ``ResearchJobService`` to an async ``JobsPort``.
@@ -195,3 +266,8 @@ class AsyncJobs:
         self, tenant_id: str, job_id: UUID, command: EvidenceRecordCreate
     ) -> EvidenceRecord:
         return self._service.add_evidence(tenant_id, job_id, command)
+
+    async def record_findings(
+        self, tenant_id: str, job_id: UUID, findings: builtins.list[Finding]
+    ) -> builtins.list[FindingRecord]:
+        return self._service.record_findings(tenant_id, job_id, findings)

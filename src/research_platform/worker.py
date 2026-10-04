@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
+from typing import Any
 
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -25,8 +27,10 @@ from temporalio.worker import Worker
 from research_platform.agents.crew import build_agent
 from research_platform.application.jobs import ResearchJobService
 from research_platform.composition import (
+    build_artifact_store,
     build_gateway,
     build_job_repository,
+    describe_artifacts,
     describe_identity,
     describe_persistence,
 )
@@ -40,6 +44,7 @@ from research_platform.observability.metrics import configure_metrics
 from research_platform.observability.tracing import configure_tracing
 from research_platform.settings import Settings, load_settings
 from research_platform.workflow.activities import JobActivities, ResearchActivities
+from research_platform.workflow.publishing import GatewaySourceChecker, PublicationActivities
 from research_platform.workflow.research_workflow import TASK_QUEUE, ResearchJobWorkflow
 
 logger = logging.getLogger(__name__)
@@ -116,6 +121,42 @@ def build_job_activities(
     return JobActivities(jobs=jobs or build_job_service(settings))
 
 
+def build_publication_activities(
+    settings: Settings, jobs: ResearchJobService, research: ResearchActivities
+) -> PublicationActivities:
+    """The activity that exports a finished report and its provenance manifest.
+
+    It re-reads cited sources through the same gateway the researchers used, so a
+    re-read is governed and audited exactly like the call that captured the evidence.
+    """
+    return PublicationActivities(
+        jobs=jobs,
+        artifacts=build_artifact_store(settings),
+        sources=GatewaySourceChecker(research.gateway),
+    )
+
+
+def registered_activities(
+    research: ResearchActivities, persistence: JobActivities, publication: PublicationActivities
+) -> dict[str, Callable[..., Any]]:
+    """Every activity ``ResearchJobWorkflow`` calls, by the step it performs.
+
+    Kept in one place so a worker - and a test that stands one up - cannot register a
+    different set from the one the workflow expects.
+    """
+    return {
+        "plan": research.plan,
+        "research": research.research,
+        "analyze": research.analyze,
+        "critique": research.critique,
+        "report": research.report,
+        "transition": persistence.transition,
+        "add_evidence": persistence.add_evidence,
+        "record_findings": persistence.record_findings,
+        "publish": publication.publish,
+    }
+
+
 async def run(settings: Settings | None = None) -> None:
     logging.basicConfig(level=logging.INFO)
     settings = settings or load_settings()
@@ -125,6 +166,7 @@ async def run(settings: Settings | None = None) -> None:
     logger.info("tracing: %s", tracing.description)
     logger.info("metrics: %s", metrics.description)
     logger.info("persistence: %s", describe_persistence(settings))
+    logger.info("artifacts: %s", describe_artifacts(settings))
 
     client = await Client.connect(
         settings.temporal_target_host,
@@ -135,20 +177,17 @@ async def run(settings: Settings | None = None) -> None:
     jobs = build_job_service(settings)
     research_activities = build_research_activities(settings, jobs)
     job_activities = build_job_activities(settings, jobs)
+    publication_activities = build_publication_activities(settings, jobs, research_activities)
 
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
         workflows=[ResearchJobWorkflow],
-        activities=[
-            research_activities.plan,
-            research_activities.research,
-            research_activities.analyze,
-            research_activities.critique,
-            research_activities.report,
-            job_activities.transition,
-            job_activities.add_evidence,
-        ],
+        activities=list(
+            registered_activities(
+                research_activities, job_activities, publication_activities
+            ).values()
+        ),
     )
     logger.info("worker polling task queue %r on %s", TASK_QUEUE, settings.temporal_target_host)
     await worker.run()

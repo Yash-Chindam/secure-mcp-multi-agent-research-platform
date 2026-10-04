@@ -31,7 +31,9 @@ from research_platform.main import create_app
 from research_platform.mcp.catalogue import default_registry
 from research_platform.mcp.gateway import CapabilityGateway
 from research_platform.settings import Settings
+from research_platform.worker import registered_activities
 from research_platform.workflow.activities import JobActivities, ResearchActivities
+from research_platform.workflow.publishing import GatewaySourceChecker, PublicationActivities
 from research_platform.workflow.research_workflow import TASK_QUEUE, ResearchJobWorkflow
 from research_platform.workflow.starter import TemporalWorkflowStarter, workflow_id_for
 
@@ -82,20 +84,17 @@ async def running_platform(*, requires_reviewer: bool) -> AsyncIterator[Platform
             build_agent=honest_crew(requires_reviewer=requires_reviewer),
         )
         persistence = JobActivities(jobs=jobs)
+        publication = PublicationActivities(
+            jobs=jobs,
+            artifacts=app.state.artifacts,
+            sources=GatewaySourceChecker(research.gateway),
+        )
         async with (
             Worker(
                 env.client,
                 task_queue=TASK_QUEUE,
                 workflows=[ResearchJobWorkflow],
-                activities=[
-                    research.plan,
-                    research.research,
-                    research.analyze,
-                    research.critique,
-                    research.report,
-                    persistence.transition,
-                    persistence.add_evidence,
-                ],
+                activities=list(registered_activities(research, persistence, publication).values()),
             ),
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://platform.test"
@@ -127,6 +126,62 @@ async def test_a_submitted_question_runs_to_a_completed_job() -> None:
     ]
 
 
+async def test_a_completed_job_publishes_a_report_a_manifest_and_its_findings() -> None:
+    async with running_platform(requires_reviewer=False) as platform:
+        job = await submit(platform)
+        await platform.wait_for(job["id"], "completed")
+        base = f"/api/v1/jobs/{job['id']}"
+
+        report = await platform.http.get(f"{base}/report", headers=REQUESTER)
+        markdown = await platform.http.get(
+            f"{base}/report", headers=REQUESTER, params={"format": "markdown"}
+        )
+        manifest = await platform.http.get(f"{base}/manifest", headers=REQUESTER)
+        findings = await platform.http.get(f"{base}/findings", headers=REQUESTER)
+        evidence = await platform.http.get(f"{base}/evidence", headers=REQUESTER)
+
+    [record] = evidence.json()
+    assert report.json()["title"] == "Vendor pricing"
+    assert report.headers["X-Report-Partial"] == "false"
+    assert markdown.headers["content-type"].startswith("text/markdown")
+    assert "The vendor charges 20 USD per seat [1]." in markdown.text
+    assert "source unchanged at publication" in markdown.text
+
+    listed = manifest.json()
+    assert listed["report_sha256"] == report.headers["X-Report-SHA256"]
+    assert listed["is_partial"] is False
+    [source] = listed["evidence"]
+    assert source["id"] == record["id"]
+    assert source["cited"] is True
+    assert source["drift"] == "unchanged"
+    assert "excerpt" not in source
+    # The manifest lists the research's own call, not publication's re-read of it.
+    assert [call["id"] for call in listed["tool_invocations"]] == [record["tool_invocation_id"]]
+
+    [finding] = findings.json()
+    assert finding["critic_verdict"] == "supported"
+    assert finding["reviewer_status"] == "not_required"
+    assert finding["supporting_evidence_ids"] == [record["id"]]
+
+
+async def test_a_reviewers_approval_is_recorded_on_the_findings() -> None:
+    async with running_platform(requires_reviewer=True) as platform:
+        job = await submit(platform)
+        await platform.wait_for(job["id"], "review_required")
+        waiting = await platform.http.get(f"/api/v1/jobs/{job['id']}/findings", headers=REVIEWER)
+        unpublished = await platform.http.get(f"/api/v1/jobs/{job['id']}/report", headers=REVIEWER)
+
+        await platform.http.post(
+            f"/api/v1/jobs/{job['id']}/review", headers=REVIEWER, json={"decision": "approve"}
+        )
+        await platform.wait_for(job["id"], "completed")
+        decided = await platform.http.get(f"/api/v1/jobs/{job['id']}/findings", headers=REVIEWER)
+
+    assert [finding["reviewer_status"] for finding in waiting.json()] == ["pending"]
+    assert unpublished.status_code == 404
+    assert [finding["reviewer_status"] for finding in decided.json()] == ["approved"]
+
+
 async def test_every_tool_call_the_agents_made_is_in_the_jobs_audit_trail() -> None:
     async with running_platform(requires_reviewer=False) as platform:
         job = await submit(platform)
@@ -134,7 +189,10 @@ async def test_every_tool_call_the_agents_made_is_in_the_jobs_audit_trail() -> N
 
         trail = await platform.http.get(f"/api/v1/jobs/{job['id']}/invocations", headers=REQUESTER)
 
-    [call] = trail.json()
+    # The research made one call; publication then re-read the cited source.
+    call, reread = trail.json()
+    assert reread["capability"] == "fetch"
+    assert reread["outcome"] == "succeeded"
     assert call["mcp_server"] == "web-research"
     assert call["capability"] == "fetch"
     assert call["outcome"] == "succeeded"

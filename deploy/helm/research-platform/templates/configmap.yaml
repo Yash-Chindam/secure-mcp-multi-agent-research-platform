@@ -19,6 +19,8 @@ data:
   RESEARCH_GITHUB_REPOSITORIES: {{ .Values.settings.githubRepositories | quote }}
   RESEARCH_SANDBOX_IMAGE: {{ .Values.settings.sandboxImage | quote }}
   RESEARCH_MCP_CLIENT_ID: {{ .Values.settings.mcpClientId | quote }}
+  RESEARCH_ARTIFACT_ENDPOINT: {{ tpl .Values.settings.artifactEndpoint . | quote }}
+  RESEARCH_ARTIFACT_BUCKET: {{ .Values.settings.artifactBucket | quote }}
   {{- $urls := list }}
   {{- range .Values.mcpServers }}
   {{- $urls = append $urls (printf "%s=http://%s-mcp-%s:%v/mcp" .name (include "research-platform.fullname" $) .name (.port | default 8000)) }}

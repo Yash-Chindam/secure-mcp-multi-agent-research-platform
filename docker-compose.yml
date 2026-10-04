@@ -16,9 +16,12 @@
 ## local work, and reported as a warning at startup. See deploy/helm's README for the
 ## restricted role a real deployment should connect as instead.
 ##
+## Reports, provenance manifests and evidence bundles are exported to MinIO
+## (console at http://localhost:9001, minioadmin/minioadmin); the bucket is created on
+## first start.
+##
 ## First run: create a realm and client in Keycloak (http://localhost:8081, admin/admin)
-## and a bucket in MinIO (http://localhost:9001, minioadmin/minioadmin) - neither is
-## auto-provisioned. Everything else works from a cold `docker compose up`.
+## - it is not auto-provisioned. Everything else works from a cold `docker compose up`.
 
 name: research-platform
 
@@ -33,6 +36,10 @@ x-app-environment: &app-environment
   RESEARCH_TEMPORAL_TARGET_HOST: temporal:7233
   RESEARCH_WORKFLOWS_ENABLED: "true"
   RESEARCH_DATABASE_URL: postgresql://research:research@postgres:5432/research_platform
+  RESEARCH_ARTIFACT_ENDPOINT: http://minio:9000
+  RESEARCH_ARTIFACT_ACCESS_KEY: minioadmin
+  RESEARCH_ARTIFACT_SECRET_KEY: minioadmin
+  RESEARCH_ARTIFACT_BUCKET: research-artifacts
   # The public sources research may read. Override in the environment or an .env file.
   RESEARCH_WEB_ALLOWED_DOMAINS: ${RESEARCH_WEB_ALLOWED_DOMAINS:-wikipedia.org,arxiv.org}
 
@@ -48,6 +55,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_started
       temporal:
         condition: service_started
       opa:
@@ -68,6 +77,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_started
       temporal:
         condition: service_started
       opa:
@@ -118,7 +129,11 @@ services:
     networks: [data]
 
   minio:
-    image: minio/minio:latest
+    # MinIO no longer publishes its own community image; this is the maintained build.
+    # It runs as a non-root user by default, which cannot write a fresh named volume, so
+    # this development stack runs it as root.
+    image: cgr.dev/chainguard/minio:latest
+    user: "0:0"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin

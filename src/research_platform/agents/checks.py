@@ -14,7 +14,7 @@ from collections.abc import Iterable
 from uuid import UUID
 
 from research_platform.agents.contracts import AnalysisResult, CriticReview, ResearchReport
-from research_platform.domain.models import EvidenceRecord
+from research_platform.domain.models import CriticVerdict, EvidenceRecord
 
 
 def _unknown(cited: Iterable[UUID], known: frozenset[UUID]) -> list[str]:
@@ -55,6 +55,16 @@ def check_review(
         if unknown := _unknown(verdict.conflicting_evidence_ids, known):
             problems.append(
                 f"verdicts.{index}: names conflicting evidence that was never recorded: {unknown}"
+            )
+    contested = {
+        finding.claim for finding in analysis.findings if finding.contradicting_evidence_ids
+    }
+    for index, verdict in enumerate(review.verdicts):
+        if verdict.verdict is CriticVerdict.SUPPORTED and verdict.claim in contested:
+            problems.append(
+                f"verdicts.{index}: the analyst recorded evidence contradicting this claim, "
+                "so it cannot be marked supported; mark it contradicted and name that "
+                "evidence, or unsupported"
             )
     for index, claim in enumerate(proposed):
         if claim not in judged:

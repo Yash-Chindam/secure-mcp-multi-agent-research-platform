@@ -99,6 +99,11 @@ class PlatformMetrics:
             unit="{citation}",
             description="Citations a report made to evidence that was never recorded.",
         )
+        self.source_checks = meter.create_counter(
+            "research.report.source_checks",
+            unit="{source}",
+            description="Cited sources re-read at publication, by whether they had drifted.",
+        )
         self.mcp_calls = meter.create_counter(
             "mcp.invocation.count",
             unit="{call}",

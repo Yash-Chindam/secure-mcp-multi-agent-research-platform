@@ -36,6 +36,10 @@ spec:
             - secretRef:
                 name: {{ include "research-platform.fullname" . }}-database
             {{- end }}
+            {{- if and .Values.settings.artifactEndpoint .Values.settings.artifactAccessKey }}
+            - secretRef:
+                name: {{ include "research-platform.fullname" . }}-artifacts
+            {{- end }}
             {{- if .Values.existingSecretName }}
             - secretRef:
                 name: {{ .Values.existingSecretName }}

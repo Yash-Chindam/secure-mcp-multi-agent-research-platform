@@ -20,7 +20,17 @@ The foundation provides:
 - All five FastMCP research servers, driven by the gateway over real MCP round trips.
 - Policy-as-code authorization in Rego, layered with the registry boundary and failing closed.
 - OAuth access token verification against a Keycloak realm.
-- A typed FastAPI boundary for research jobs and evidence.
+- CrewAI planner, researcher, analyst, critic and reporter agents on a durable Temporal
+  workflow, with a reviewer checkpoint that suspends without holding a worker.
+- A PostgreSQL system of record with forced row-level security per tenant.
+- Evidence the platform verifies itself: an excerpt must appear in what a recorded tool
+  call returned, and every later citation must name recorded evidence.
+- Findings stored with their critic verdict and reviewer status.
+- A published report (JSON and Markdown), provenance manifest and evidence bundle,
+  exported to MinIO under a per-tenant prefix.
+- Content-drift detection: cited sources are re-read at publication and flagged if the
+  captured excerpt is gone, while the original evidence is kept.
+- A typed FastAPI boundary for research jobs, evidence, findings, reports and audit trails.
 - A requester interface for creating and listing assignments.
 - Strict typing, unit tests, API integration tests, and Playwright browser coverage.
 - A container image build verified on every pull request.
@@ -171,9 +181,31 @@ circuit rather than being mounted against a placeholder that returns nothing an 
 as an answer. The analysis server likewise refuses to run anything when no isolated runtime is
 configured.
 
+### Reports and provenance
+
+A job that reaches `completed` or `partial` with a report has published four artifacts, stored
+under `tenants/<tenant>/jobs/<job id>/` in the object store:
+
+| Artifact | Read it with |
+|---|---|
+| `report.json` | `GET /api/v1/jobs/{id}/report` |
+| `report.md` | `GET /api/v1/jobs/{id}/report?format=markdown` |
+| `provenance-manifest.json` | `GET /api/v1/jobs/{id}/manifest` |
+| `evidence.json` | the object store (publishable evidence only) |
+
+The manifest lists every finding, every evidence record (source, content hash, retrieval time,
+classification, the tool call that produced it, and whether the source had drifted) and every
+tool call the research made. It never carries excerpt text. `GET /api/v1/jobs/{id}/findings`
+returns the claims with their verdicts at any point in the job, including while a reviewer is
+deciding.
+
+Set `RESEARCH_ARTIFACT_ENDPOINT`, `RESEARCH_ARTIFACT_ACCESS_KEY`, `RESEARCH_ARTIFACT_SECRET_KEY`
+and optionally `RESEARCH_ARTIFACT_BUCKET` to use MinIO or another S3-compatible store. Without
+them artifacts stay in process memory, which an API process cannot read back from a worker.
+
 ## Next milestones
 
-1. CrewAI agents for the planner, researcher, analyst, critic and reporter roles.
-2. Temporal durable execution with human approval signals.
-3. OpenTelemetry tracing and the evaluation harness.
-4. The full deployment topology in section 15.
+1. Token and cost accounting per job, retry counts and circuit-state metrics (section 13).
+2. Redis-backed rate limits and budgets shared across workers (section 6).
+3. The remaining section 14 evaluations: cross-tenant prevention, task completion, cost and time.
+4. Review, report and audit views in the requester interface.

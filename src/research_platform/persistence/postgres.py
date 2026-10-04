@@ -22,8 +22,9 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from research_platform.application.jobs import JobNotFoundError
+from research_platform.application.publication import ReportPublication
 from research_platform.domain.invocations import ToolInvocation
-from research_platform.domain.models import EvidenceRecord, ResearchJob
+from research_platform.domain.models import EvidenceRecord, FindingRecord, ResearchJob
 from research_platform.persistence.schema import SCHEMA_STATEMENTS, TENANT_SETTING
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,18 @@ def create_schema(pool: ConnectionPool[Connection[Any]]) -> None:
     with pool.connection() as connection:
         for statement in SCHEMA_STATEMENTS:
             connection.execute(statement)
+
+
+_FINDING_COLUMNS = """
+    id, tenant_id, job_id, claim, supporting_evidence_ids, contradicting_evidence_ids,
+    calculation_ids, confidence, critic_verdict, reviewer_status, recorded_at
+"""
+
+
+_PUBLICATION_COLUMNS = """
+    tenant_id, job_id, published_at, report_key, markdown_key, manifest_key, evidence_key,
+    report_sha256, is_partial, drifted_evidence_ids
+"""
 
 
 def _rows(connection: Connection[Any]) -> Cursor[Any]:
@@ -243,6 +256,112 @@ class PostgresJobRepository:
                 .fetchall()
             )
         return [ToolInvocation.model_validate(row) for row in rows]
+
+    def replace_findings(
+        self, tenant_id: str, job_id: UUID, findings: builtins.list[FindingRecord]
+    ) -> builtins.list[FindingRecord]:
+        """Swap the job's findings for the latest set, in one transaction.
+
+        Delete and insert share a transaction, so a reader sees the old set or the new
+        one and never an empty or half-written one.
+        """
+        self.get(tenant_id, job_id)
+        with self._acting_for(tenant_id) as connection:
+            connection.execute(
+                "DELETE FROM findings WHERE tenant_id = %s AND job_id = %s", (tenant_id, job_id)
+            )
+            for position, finding in enumerate(findings):
+                connection.execute(
+                    f"""
+                    INSERT INTO findings ({_FINDING_COLUMNS}, position)
+                    VALUES (
+                        %(id)s, %(tenant_id)s, %(job_id)s, %(claim)s, %(supporting)s,
+                        %(contradicting)s, %(calculations)s, %(confidence)s,
+                        %(critic_verdict)s, %(reviewer_status)s, %(recorded_at)s, %(position)s
+                    )
+                    """,
+                    _finding_parameters(finding, position),
+                )
+        return findings
+
+    def list_findings(self, tenant_id: str, job_id: UUID) -> builtins.list[FindingRecord]:
+        self.get(tenant_id, job_id)
+        with self._acting_for(tenant_id) as connection:
+            rows = (
+                _rows(connection)
+                .execute(
+                    f"""
+                SELECT {_FINDING_COLUMNS} FROM findings
+                WHERE tenant_id = %s AND job_id = %s
+                ORDER BY position
+                """,
+                    (tenant_id, job_id),
+                )
+                .fetchall()
+            )
+        return [FindingRecord.model_validate(row) for row in rows]
+
+    def record_publication(self, publication: ReportPublication) -> ReportPublication:
+        """Store where a job's report was published; a later publication replaces it."""
+        self.get(publication.tenant_id, publication.job_id)
+        with self._acting_for(publication.tenant_id) as connection:
+            connection.execute(
+                f"""
+                INSERT INTO report_publications ({_PUBLICATION_COLUMNS})
+                VALUES (
+                    %(tenant_id)s, %(job_id)s, %(published_at)s, %(report_key)s,
+                    %(markdown_key)s, %(manifest_key)s, %(evidence_key)s,
+                    %(report_sha256)s, %(is_partial)s, %(drifted)s
+                )
+                ON CONFLICT (tenant_id, job_id) DO UPDATE SET
+                    published_at = EXCLUDED.published_at,
+                    report_key = EXCLUDED.report_key,
+                    markdown_key = EXCLUDED.markdown_key,
+                    manifest_key = EXCLUDED.manifest_key,
+                    evidence_key = EXCLUDED.evidence_key,
+                    report_sha256 = EXCLUDED.report_sha256,
+                    is_partial = EXCLUDED.is_partial,
+                    drifted_evidence_ids = EXCLUDED.drifted_evidence_ids
+                """,
+                {
+                    **publication.model_dump(exclude={"drifted_evidence_ids"}),
+                    "drifted": Jsonb([str(item) for item in publication.drifted_evidence_ids]),
+                },
+            )
+        return publication
+
+    def get_publication(self, tenant_id: str, job_id: UUID) -> ReportPublication | None:
+        self.get(tenant_id, job_id)
+        with self._acting_for(tenant_id) as connection:
+            row = (
+                _rows(connection)
+                .execute(
+                    f"""
+                SELECT {_PUBLICATION_COLUMNS} FROM report_publications
+                WHERE tenant_id = %s AND job_id = %s
+                """,
+                    (tenant_id, job_id),
+                )
+                .fetchone()
+            )
+        return ReportPublication.model_validate(row) if row is not None else None
+
+
+def _finding_parameters(finding: FindingRecord, position: int) -> dict[str, Any]:
+    return {
+        "id": finding.id,
+        "tenant_id": finding.tenant_id,
+        "job_id": finding.job_id,
+        "claim": finding.claim,
+        "supporting": Jsonb([str(item) for item in finding.supporting_evidence_ids]),
+        "contradicting": Jsonb([str(item) for item in finding.contradicting_evidence_ids]),
+        "calculations": Jsonb([str(item) for item in finding.calculation_ids]),
+        "confidence": finding.confidence,
+        "critic_verdict": finding.critic_verdict.value,
+        "reviewer_status": finding.reviewer_status.value,
+        "recorded_at": finding.recorded_at,
+        "position": position,
+    }
 
 
 def build_repository(

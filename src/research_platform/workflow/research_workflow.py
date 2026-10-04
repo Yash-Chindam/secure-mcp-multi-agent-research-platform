@@ -26,9 +26,12 @@ from research_platform.agents.contracts import (
     ResearchPlan,
     ResearchReport,
 )
+from research_platform.application.publication import ReportPublication
 from research_platform.domain.models import (
     EvidenceRecord,
     EvidenceRecordCreate,
+    Finding,
+    FindingRecord,
     JobStatus,
     ResearchJob,
 )
@@ -58,6 +61,9 @@ would be refused the same way, three more times over."""
 
 JOB_ACTIVITY_TIMEOUT = timedelta(seconds=30)
 """Persisting a status transition or a piece of evidence is local, fast persistence."""
+
+PUBLICATION_TIMEOUT = timedelta(minutes=5)
+"""Publishing re-reads every cited source through the gateway before it writes anything."""
 
 JOB_RETRY_POLICY = RetryPolicy(maximum_attempts=5)
 """Every activity call needs an explicit, bounded retry policy.
@@ -100,6 +106,7 @@ class ResearchJobWorkflow:
             critique=self._critique,
             report=self._report,
             await_reviewer_decision=self._await_reviewer_decision,
+            publish=self._publish,
         )
         return await run_research_job(job, jobs=self, activities=activities)
 
@@ -125,6 +132,28 @@ class ResearchJobWorkflow:
             start_to_close_timeout=JOB_ACTIVITY_TIMEOUT,
             retry_policy=JOB_RETRY_POLICY,
             result_type=EvidenceRecord,
+        )
+
+    async def record_findings(
+        self, tenant_id: str, job_id: UUID, findings: list[Finding]
+    ) -> list[FindingRecord]:
+        return await workflow.execute_activity(  # type: ignore[no-any-return]
+            "record_job_findings",
+            args=[tenant_id, job_id, findings],
+            start_to_close_timeout=JOB_ACTIVITY_TIMEOUT,
+            retry_policy=JOB_RETRY_POLICY,
+            result_type=list[FindingRecord],
+        )
+
+    async def _publish(
+        self, job: ResearchJob, report: ResearchReport, shortfalls: list[str]
+    ) -> ReportPublication:
+        return await workflow.execute_activity(  # type: ignore[no-any-return]
+            "publish_report",
+            args=[job, report, shortfalls],
+            start_to_close_timeout=PUBLICATION_TIMEOUT,
+            retry_policy=JOB_RETRY_POLICY,
+            result_type=ReportPublication,
         )
 
     # -- the five section 7 roles, each a durable activity --
