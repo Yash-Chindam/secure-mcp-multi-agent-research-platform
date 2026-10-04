@@ -83,6 +83,43 @@ The image installs the package from a wheel built in a separate stage, runs as a
 `app` user, and reports health through `/health`. Continuous integration rebuilds the image on
 every pull request without publishing it to any registry.
 
+## Run the whole stack
+
+```powershell
+docker compose up --build
+```
+
+This starts the API, a worker, the web research MCP server, Temporal, PostgreSQL, Redis, MinIO,
+Keycloak, OPA and the telemetry collector. It runs the way a deployment does:
+
+- **Tokens are verified.** Keycloak imports the `research` realm from
+  `deploy/keycloak/research-realm.json`, and the API and the MCP server accept nothing but a
+  token it issued. The development headers are refused.
+- **Row-level security binds the application.** PostgreSQL creates a second, non-superuser role
+  (`deploy/postgres/10-application-role.sh`) and the platform connects as that role, so the
+  tenant policies apply to every query it makes.
+- **The worker calls the MCP server as a service account**, with a client-credentials token.
+
+Open <http://localhost:8000> and choose **Sign in**. The realm has four development accounts,
+each with its user name as its password:
+
+| User    | Tenant  | Role          | Clearance    |
+| ------- | ------- | ------------- | ------------ |
+| `alice` | `demo`  | requester     | internal     |
+| `rita`  | `demo`  | reviewer      | internal     |
+| `adam`  | `demo`  | administrator | restricted   |
+| `olga`  | `other` | requester     | public       |
+
+`olga` is there to show the tenant boundary: she cannot see anything the other three create.
+Keycloak's own console is at <http://localhost:8081> (`admin` / `admin`).
+
+The realm file, its passwords and the gateway client secret are for local use only. A real
+deployment brings its own realm and secrets; the Helm chart takes them as values.
+
+Set `RESEARCH_AGENT_LLM` and the matching provider key (for example `ANTHROPIC_API_KEY`) in the
+environment before starting the stack. Without a key a job fails at its first agent step and says
+so in its status.
+
 ## Repository automation
 
 - Dependabot opens weekly grouped updates for pip, GitHub Actions, and the Docker base image.

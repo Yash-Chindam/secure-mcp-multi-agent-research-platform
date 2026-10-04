@@ -34,6 +34,10 @@ class Settings(BaseSettings):
         description="Where the issuer publishes its signing keys; derived from the issuer "
         "when unset.",
     )
+    oidc_ui_client_id: str | None = Field(
+        default=None,
+        description="The public OAuth client the requester interface signs users in with.",
+    )
     opa_url: str | None = Field(
         default=None,
         description="Base URL of the Open Policy Agent deployment; unset disables it.",
@@ -132,6 +136,20 @@ class Settings(BaseSettings):
         "job's cost against its budget. Set it to match RESEARCH_AGENT_LLM.",
     )
     llm_output_cost_per_million_usd: float = Field(default=0.60, ge=0)
+
+    def otlp_signal_endpoint(self, signal: str) -> str:
+        """Where one signal is sent: the configured collector plus that signal's path.
+
+        The setting names the collector (``http://collector:4318``). An OTLP/HTTP
+        exporter given an endpoint in code uses it exactly as written, so the
+        ``/v1/traces`` or ``/v1/metrics`` path is added here; without it every export is
+        a 404. An endpoint that already ends in the path is left alone.
+        """
+        if not self.otel_exporter_otlp_endpoint:
+            raise ValueError("no OTLP endpoint is configured")
+        base = self.otel_exporter_otlp_endpoint.rstrip("/")
+        path = f"/v1/{signal}"
+        return base if base.endswith(path) else f"{base}{path}"
 
     @property
     def tokens_are_verified(self) -> bool:

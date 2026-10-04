@@ -1,0 +1,143 @@
+{
+  "realm": "research",
+  "enabled": true,
+  "displayName": "Research platform (development)",
+  "accessTokenLifespan": 300,
+  "sslRequired": "none",
+  "roles": {
+    "realm": [
+      { "name": "requester", "description": "Submits research assignments" },
+      { "name": "reviewer", "description": "Decides flagged research" },
+      { "name": "administrator", "description": "Manages servers and policy" }
+    ]
+  },
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]}},{\"name\":\"email\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]}},{\"name\":\"firstName\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]}},{\"name\":\"lastName\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]}},{\"name\":\"tenant_id\",\"permissions\":{\"view\":[\"admin\"],\"edit\":[\"admin\"]}},{\"name\":\"clearance\",\"permissions\":{\"view\":[\"admin\"],\"edit\":[\"admin\"]}}]}"
+          ]
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "research-ui",
+      "name": "Requester interface",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:8000/*"],
+      "webOrigins": ["http://localhost:8000"],
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "protocolMappers": [
+        {
+          "name": "platform-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "research-platform",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "tenant_id",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "clearance",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "clearance",
+            "claim.name": "clearance",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "research-gateway",
+      "name": "Capability gateway (calls MCP servers)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "research-gateway-development-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "platform-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "research-platform",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "alice@demo.test",
+      "firstName": "Alice",
+      "lastName": "Requester",
+      "attributes": { "tenant_id": ["demo"], "clearance": ["internal"] },
+      "credentials": [{ "type": "password", "value": "alice", "temporary": false }],
+      "realmRoles": ["requester"]
+    },
+    {
+      "username": "rita",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "rita@demo.test",
+      "firstName": "Rita",
+      "lastName": "Reviewer",
+      "attributes": { "tenant_id": ["demo"], "clearance": ["internal"] },
+      "credentials": [{ "type": "password", "value": "rita", "temporary": false }],
+      "realmRoles": ["reviewer"]
+    },
+    {
+      "username": "adam",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "adam@demo.test",
+      "firstName": "Adam",
+      "lastName": "Administrator",
+      "attributes": { "tenant_id": ["demo"], "clearance": ["restricted"] },
+      "credentials": [{ "type": "password", "value": "adam", "temporary": false }],
+      "realmRoles": ["administrator"]
+    },
+    {
+      "username": "olga",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "olga@other.test",
+      "firstName": "Olga",
+      "lastName": "Outsider",
+      "attributes": { "tenant_id": ["other"], "clearance": ["public"] },
+      "credentials": [{ "type": "password", "value": "olga", "temporary": false }],
+      "realmRoles": ["requester"]
+    }
+  ]
+}

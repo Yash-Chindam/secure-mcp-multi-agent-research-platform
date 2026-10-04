@@ -13,7 +13,10 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN addgroup --system app && adduser --system --ingroup app app
+# CrewAI creates a data directory under the home directory when it is imported, so the
+# unprivileged user needs a home it can write to.
+RUN addgroup --system app && adduser --system --ingroup app --home /home/app app
+ENV HOME=/home/app
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 

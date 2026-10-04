@@ -53,7 +53,7 @@ def configure_metrics(
     readers: list[MetricReader] = []
     exports = bool(settings.otel_exporter_otlp_endpoint)
     if exports:
-        exporter = OTLPMetricExporter(endpoint=settings.otel_exporter_otlp_endpoint)
+        exporter = OTLPMetricExporter(endpoint=settings.otlp_signal_endpoint("metrics"))
         readers.append(PeriodicExportingMetricReader(exporter))
     if extra_reader is not None:
         readers.append(extra_reader)
