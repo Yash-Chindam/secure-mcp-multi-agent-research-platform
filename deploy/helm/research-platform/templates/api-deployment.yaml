@@ -38,6 +38,10 @@ spec:
             - secretRef:
                 name: {{ include "research-platform.fullname" . }}-database
             {{- end }}
+            {{- if .Values.settings.redisUrl }}
+            - secretRef:
+                name: {{ include "research-platform.fullname" . }}-redis-url
+            {{- end }}
             {{- if and .Values.settings.artifactEndpoint .Values.settings.artifactAccessKey }}
             - secretRef:
                 name: {{ include "research-platform.fullname" . }}-artifacts

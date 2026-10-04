@@ -18,11 +18,12 @@ from dataclasses import dataclass
 
 from fastmcp import FastMCP
 
+from research_platform.mcp.breaker import LimitStoreUnavailable
 from research_platform.mcp.servers.backends import SourceDocument, WebBackend
 from research_platform.mcp.servers.web_boundary import (
     DomainPolicy,
+    RateLimiter,
     RateLimitExceeded,
-    SlidingWindowRateLimiter,
     SourceNotAllowed,
     normalize_source_url,
     rate_limit_key,
@@ -37,7 +38,7 @@ class WebResearchService:
 
     backend: WebBackend
     policy: DomainPolicy
-    limiter: SlidingWindowRateLimiter
+    limiter: RateLimiter
 
     def search(self, tenant_id: str, query: str, limit: int) -> list[SourceDocument]:
         _require_tenant(tenant_id)
@@ -83,6 +84,8 @@ def build_web_research_server(service: WebResearchService) -> FastMCP:
             documents = service.search(tenant_id, query, limit)
         except RateLimitExceeded as error:
             raise ValueError(f"rate limited: {error}") from error
+        except LimitStoreUnavailable as error:
+            raise ValueError(f"rate limit unavailable: {error}") from error
         return json.dumps(
             [{"url": document.url, "title": document.title} for document in documents],
             separators=(",", ":"),
@@ -97,6 +100,8 @@ def build_web_research_server(service: WebResearchService) -> FastMCP:
             raise ValueError(f"source refused: {error}") from error
         except RateLimitExceeded as error:
             raise ValueError(f"rate limited: {error}") from error
+        except LimitStoreUnavailable as error:
+            raise ValueError(f"rate limit unavailable: {error}") from error
         return document.text
 
     return server

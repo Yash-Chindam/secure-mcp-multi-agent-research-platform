@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from research_platform.application.artifacts import ArtifactStore, InMemoryArtifactStore
 from research_platform.application.jobs import InMemoryJobRepository, JobRepository
 from research_platform.auth import KeyResolver, TokenVerifier
+from research_platform.mcp.breaker import BudgetLedger, Budgets
 from research_platform.mcp.catalogue import default_registry
 from research_platform.mcp.gateway import CapabilityExecutor, CapabilityGateway, InvocationSink
 from research_platform.mcp.opa import AllOfPolicyEngine, OpaPolicyEngine
@@ -20,6 +21,8 @@ from research_platform.persistence.object_store import (
     build_artifact_store as connect_artifact_store,
 )
 from research_platform.persistence.postgres import build_repository
+from research_platform.persistence.redis_state import RedisBudgetLedger
+from research_platform.persistence.redis_state import connect as connect_redis
 from research_platform.settings import Settings
 
 
@@ -89,8 +92,27 @@ def build_gateway(
         registry=registry or default_registry(),
         executor=executor,
         policy=build_policy_stack(settings).engine,
+        budgets=build_budget_ledger(settings),
         audit=audit,
     )
+
+
+def build_budget_ledger(settings: Settings) -> Budgets:
+    """The ledger jobs spend against: shared through Redis, or this process's own.
+
+    A per-process ledger lets each worker grant a job its whole allowance, so a
+    deployment with more than one worker must configure Redis for a budget to mean
+    what it says.
+    """
+    if not settings.redis_url:
+        return BudgetLedger()
+    return RedisBudgetLedger(connect_redis(settings.redis_url))
+
+
+def describe_limits(settings: Settings) -> str:
+    if settings.limits_are_shared:
+        return "budgets and rate limits shared through Redis"
+    return "per-process budgets and rate limits (no Redis configured)"
 
 
 def build_job_repository(settings: Settings) -> JobRepository:

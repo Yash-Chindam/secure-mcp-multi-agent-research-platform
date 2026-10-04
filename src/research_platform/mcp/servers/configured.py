@@ -40,10 +40,12 @@ from research_platform.mcp.servers.postgres_backend import PostgresSqlBackend
 from research_platform.mcp.servers.sandbox_boundary import SandboxLimits
 from research_platform.mcp.servers.web_boundary import (
     DomainPolicy,
+    RateLimiter,
     SourceNotAllowed,
     normalize_source_url,
 )
 from research_platform.mcp.service_tokens import ClientCredentialsTokens
+from research_platform.persistence.redis_state import RedisRateLimiter, connect
 from research_platform.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,17 @@ class ConfiguredServers:
     @property
     def names(self) -> list[str]:
         return sorted(self.targets)
+
+
+def _web_limiter(settings: Settings) -> RateLimiter | None:
+    """The request rate limit, shared through Redis when one is configured.
+
+    Without Redis each replica of the web research server counts its own window, so the
+    effective limit is the configured one times the number of replicas.
+    """
+    if not settings.redis_url:
+        return None
+    return RedisRateLimiter(connect(settings.redis_url), limit=settings.web_requests_per_minute)
 
 
 def _web(settings: Settings) -> tuple[WebBackend | None, DomainPolicy | None]:
@@ -133,6 +146,7 @@ def build_local_servers(
         web_backend=web_backend,
         web_policy=web_policy,
         web_requests_per_minute=settings.web_requests_per_minute,
+        web_limiter=_web_limiter(settings) if web_backend is not None else None,
         workspace_roots=(
             WorkspaceRoots({tenant: Path(root) for tenant, root in roots.items()})
             if roots

@@ -48,8 +48,20 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # Shared budgets and rate limits are proven against a real Redis: atomic claims
+      # under concurrency are a property of the store, not of a stand-in for it.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       RESEARCH_TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
+      RESEARCH_TEST_REDIS_URL: redis://localhost:6379/0
       RESEARCH_TEST_ARTIFACT_ENDPOINT: http://localhost:9000
     steps:
       - uses: actions/checkout@v7
@@ -99,8 +111,20 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # Shared budgets and rate limits are proven against a real Redis: atomic claims
+      # under concurrency are a property of the store, not of a stand-in for it.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       RESEARCH_TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
+      RESEARCH_TEST_REDIS_URL: redis://localhost:6379/0
       RESEARCH_TEST_ARTIFACT_ENDPOINT: http://localhost:9000
     steps:
       - uses: actions/checkout@v7

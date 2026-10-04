@@ -224,8 +224,13 @@ nothing yet). Time spent waiting for a reviewer is not counted.
 the provider's reported token counts and `RESEARCH_LLM_INPUT_COST_PER_MILLION_USD` /
 `RESEARCH_LLM_OUTPUT_COST_PER_MILLION_USD`, which should match the model in `RESEARCH_AGENT_LLM`.
 
+Set `RESEARCH_REDIS_URL` to count budgets and the web request rate limit in Redis. Every worker
+and server replica then spends against one total, and each claim is atomic, so two workers can
+never both take a job's last tool call. Without it each process counts its own, which is only
+correct for a single worker. If Redis becomes unreachable the platform refuses the work it cannot
+account for instead of running it unmetered.
+
 ## Next milestones
 
-1. Redis-backed rate limits and budgets shared across workers (section 6).
-2. The remaining section 14 evaluations: cross-tenant prevention, task completion, cost and time.
-3. Review, report and audit views in the requester interface.
+1. The remaining section 14 evaluations: cross-tenant prevention, task completion, cost and time.
+2. Review, report and audit views in the requester interface.

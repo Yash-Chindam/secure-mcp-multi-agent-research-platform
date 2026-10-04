@@ -14,6 +14,7 @@ from research_platform.composition import (
     build_token_verifier,
     describe_artifacts,
     describe_identity,
+    describe_limits,
     describe_persistence,
 )
 from research_platform.mcp.catalogue import default_registry
@@ -62,6 +63,7 @@ def create_app(
             "authorization": policy.description,
             "persistence": describe_persistence(resolved),
             "artifacts": describe_artifacts(resolved),
+            "limits": describe_limits(resolved),
             "workflows": (
                 "each new job starts a durable workflow"
                 if workflows is not None
