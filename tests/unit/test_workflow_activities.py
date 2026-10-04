@@ -21,6 +21,7 @@ from research_platform.agents.provenance import hash_content
 from research_platform.agents.validation import SchemaCorrectionExhausted
 from research_platform.application.jobs import InMemoryJobRepository, ResearchJobService
 from research_platform.domain.models import (
+    AccessClass,
     CriticVerdict,
     EvidenceRecord,
     EvidenceRecordCreate,
@@ -33,7 +34,11 @@ from research_platform.domain.models import (
 from research_platform.domain.tasks import AgentRole, ResearchTask
 from research_platform.mcp.catalogue import default_registry
 from research_platform.mcp.gateway import CapabilityGateway, ExecutionRequest
-from research_platform.workflow.activities import JobActivities, ResearchActivities
+from research_platform.workflow.activities import (
+    JobActivities,
+    ResearchActivities,
+    principal_for,
+)
 
 TENANT = "acme"
 EVIDENCE_ID = uuid4()
@@ -173,6 +178,47 @@ async def test_research_gives_the_researcher_only_researcher_tools() -> None:
     tool_names = {tool.name for tool in captured[0].tools}
     assert "web_research_search" in tool_names
     assert "postgres_run_analytical_query" not in tool_names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("clearance", "reads_internal_documents"),
+    [(AccessClass.PUBLIC, False), (AccessClass.INTERNAL, True), (AccessClass.RESTRICTED, True)],
+)
+async def test_a_researcher_is_offered_internal_tools_only_on_a_job_cleared_for_them(
+    clearance: AccessClass, reads_internal_documents: bool
+) -> None:
+    """The job carries its requester's clearance, and its agents act under exactly that."""
+    captured: list[ScriptedResearcher] = []
+
+    def build_agent(_role: AgentRole, tools: list[BaseTool]) -> ScriptedResearcher:
+        captured.append(ScriptedResearcher(tools))
+        return captured[-1]
+
+    job = new_job().model_copy(update={"clearance": clearance})
+
+    await ActivityEnvironment().run(researching(build_agent).research, job, research_task(job))
+
+    tool_names = {tool.name for tool in captured[0].tools}
+    assert "web_research_fetch" in tool_names
+    assert ("filesystem_read_document" in tool_names) is reads_internal_documents
+    assert ("github_read_repository" in tool_names) is reads_internal_documents
+
+
+@pytest.mark.parametrize("role", list(AgentRole))
+def test_an_agent_acts_for_the_jobs_tenant_with_the_jobs_clearance(role: AgentRole) -> None:
+    job = new_job().model_copy(update={"clearance": AccessClass.INTERNAL})
+
+    principal = principal_for(job, role)
+
+    assert principal.tenant_id == job.tenant_id
+    assert principal.clearance is AccessClass.INTERNAL
+    assert principal.agent_role is role
+    assert principal.subject_id == f"job:{job.id}"
+
+
+def test_a_job_is_public_unless_its_requester_was_cleared_for_more() -> None:
+    assert principal_for(new_job(), AgentRole.RESEARCHER).clearance is AccessClass.PUBLIC
 
 
 @pytest.mark.asyncio

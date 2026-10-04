@@ -53,8 +53,17 @@ from research_platform.mcp.registry import CapabilityRegistry
 
 
 def principal_for(job: ResearchJob, role: AgentRole) -> Principal:
+    """The identity an agent works under: the job's tenant, and the job's clearance.
+
+    The clearance is the requester's, recorded on the job when it was created. An agent
+    is therefore offered an internal document or repository only when the person it is
+    working for could have read it themselves.
+    """
     return Principal(
-        tenant_id=job.tenant_id, subject_id=f"job:{job.id}", roles=frozenset()
+        tenant_id=job.tenant_id,
+        subject_id=f"job:{job.id}",
+        roles=frozenset(),
+        clearance=job.clearance,
     ).for_agent(role)
 
 

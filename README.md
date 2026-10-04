@@ -199,6 +199,11 @@ tool call the research made. It never carries excerpt text. `GET /api/v1/jobs/{i
 returns the claims with their verdicts at any point in the job, including while a reviewer is
 deciding.
 
+A job carries the clearance of the requester who created it, and its agents act under exactly
+that clearance. Readers are held to their own: evidence, findings and audit records above a
+reader's clearance are withheld (and counted in `X-Withheld-Count`), and a report or manifest that
+draws on sources above it is refused with a 403.
+
 Set `RESEARCH_ARTIFACT_ENDPOINT`, `RESEARCH_ARTIFACT_ACCESS_KEY`, `RESEARCH_ARTIFACT_SECRET_KEY`
 and optionally `RESEARCH_ARTIFACT_BUCKET` to use MinIO or another S3-compatible store. Without
 them artifacts stay in process memory, which an API process cannot read back from a worker.

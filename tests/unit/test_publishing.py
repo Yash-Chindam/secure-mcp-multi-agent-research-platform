@@ -23,6 +23,7 @@ from research_platform.domain.models import (
     ResearchJob,
     ResearchJobCreate,
     TrustLevel,
+    most_restrictive,
 )
 from research_platform.domain.tasks import AgentRole
 from research_platform.mcp.catalogue import default_registry
@@ -447,3 +448,31 @@ async def test_a_job_is_not_recorded_as_published_when_an_artifact_could_not_be_
         await publishing.publish(platform.job, report_citing(record.id), [])
 
     assert platform.jobs.get_publication(TENANT, platform.job.id) is None
+
+
+@pytest.mark.asyncio
+async def test_a_publication_is_classified_by_the_evidence_it_draws_on(
+    platform: Platform,
+) -> None:
+    """The report by what it cites; the manifest by everything the job read."""
+    public = platform.capture()
+    internal = platform.record("Negotiated price is 14 USD.", access_class=AccessClass.INTERNAL)
+    platform.record("Margin is 62 percent.", access_class=AccessClass.RESTRICTED)
+
+    cites_public = await platform.publishing.publish(platform.job, report_citing(public.id), [])
+    cites_internal = await platform.publishing.publish(
+        platform.job, report_citing(public.id, internal.id), []
+    )
+
+    assert cites_public.report_access_class is AccessClass.PUBLIC
+    assert cites_internal.report_access_class is AccessClass.INTERNAL
+    assert cites_public.manifest_access_class is AccessClass.RESTRICTED
+
+
+def test_the_most_restrictive_class_wins_and_nothing_is_public() -> None:
+    assert most_restrictive([]) is AccessClass.PUBLIC
+    assert most_restrictive([AccessClass.PUBLIC, AccessClass.INTERNAL]) is AccessClass.INTERNAL
+    assert (
+        most_restrictive([AccessClass.RESTRICTED, AccessClass.PUBLIC, AccessClass.INTERNAL])
+        is AccessClass.RESTRICTED
+    )

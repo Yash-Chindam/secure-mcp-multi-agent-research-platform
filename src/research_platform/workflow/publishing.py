@@ -35,7 +35,7 @@ from research_platform.application.publication import (
     sha256_of,
 )
 from research_platform.domain.invocations import ToolInvocation
-from research_platform.domain.models import EvidenceRecord, ResearchJob
+from research_platform.domain.models import EvidenceRecord, ResearchJob, most_restrictive
 from research_platform.domain.tasks import AgentRole
 from research_platform.mcp.gateway import CapabilityDenied, CapabilityFailed, CapabilityGateway
 from research_platform.mcp.registry import CapabilityNotFound
@@ -220,5 +220,11 @@ class PublicationActivities:
                 report_sha256=sha256_of(body),
                 is_partial=manifest.is_partial,
                 drifted_evidence_ids=manifest.drifted_evidence_ids,
+                report_access_class=most_restrictive(
+                    record.access_class
+                    for record in evidence
+                    if record.id in report.cited_evidence_ids
+                ),
+                manifest_access_class=most_restrictive(record.access_class for record in evidence),
             )
         )

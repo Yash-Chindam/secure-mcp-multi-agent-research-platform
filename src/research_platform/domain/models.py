@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated
@@ -47,6 +48,36 @@ ALLOWED_TRANSITIONS: dict[JobStatus, frozenset[JobStatus]] = {
 STATUS_DETAIL_LIMIT = 1_000
 
 
+class TrustLevel(StrEnum):
+    """How directly the excerpt supports a claim, per the evidence policy."""
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    UNVERIFIED = "unverified"
+
+
+class AccessClass(StrEnum):
+    """Disclosure class that decides whether an excerpt may reach a report."""
+
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    RESTRICTED = "restricted"
+
+
+PUBLISHABLE_ACCESS_CLASSES = frozenset({AccessClass.PUBLIC, AccessClass.INTERNAL})
+
+ACCESS_CLASS_RANK: dict[AccessClass, int] = {
+    AccessClass.PUBLIC: 0,
+    AccessClass.INTERNAL: 1,
+    AccessClass.RESTRICTED: 2,
+}
+
+
+def clearance_covers(clearance: AccessClass, required: AccessClass) -> bool:
+    """Report whether a clearance is at least as permissive as the class required."""
+    return ACCESS_CLASS_RANK[clearance] >= ACCESS_CLASS_RANK[required]
+
+
 class ResearchBudget(BaseModel):
     max_tool_calls: int = Field(default=50, ge=1, le=10_000)
     max_runtime_seconds: int = Field(default=3_600, ge=30, le=86_400)
@@ -68,6 +99,11 @@ class ResearchJob(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     source_requirements: list[str] = Field(default_factory=list)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
+    clearance: AccessClass = Field(
+        default=AccessClass.PUBLIC,
+        description="The most sensitive data class this job's agents may reach: the "
+        "clearance of the requester who created it, never more.",
+    )
     status: JobStatus = JobStatus.CREATED
     status_detail: str | None = Field(
         default=None,
@@ -116,36 +152,6 @@ class ResearchJob(BaseModel):
         )
 
 
-class TrustLevel(StrEnum):
-    """How directly the excerpt supports a claim, per the evidence policy."""
-
-    PRIMARY = "primary"
-    SECONDARY = "secondary"
-    UNVERIFIED = "unverified"
-
-
-class AccessClass(StrEnum):
-    """Disclosure class that decides whether an excerpt may reach a report."""
-
-    PUBLIC = "public"
-    INTERNAL = "internal"
-    RESTRICTED = "restricted"
-
-
-PUBLISHABLE_ACCESS_CLASSES = frozenset({AccessClass.PUBLIC, AccessClass.INTERNAL})
-
-ACCESS_CLASS_RANK: dict[AccessClass, int] = {
-    AccessClass.PUBLIC: 0,
-    AccessClass.INTERNAL: 1,
-    AccessClass.RESTRICTED: 2,
-}
-
-
-def clearance_covers(clearance: AccessClass, required: AccessClass) -> bool:
-    """Report whether a clearance is at least as permissive as the class required."""
-    return ACCESS_CLASS_RANK[clearance] >= ACCESS_CLASS_RANK[required]
-
-
 class EvidenceRecordCreate(BaseModel):
     excerpt: NonEmptyText
     source_uri: HttpUrl | NonEmptyText
@@ -185,6 +191,11 @@ class CriticVerdict(StrEnum):
     SUPPORTED = "supported"
     UNSUPPORTED = "unsupported"
     CONTRADICTED = "contradicted"
+
+
+def most_restrictive(classes: Iterable[AccessClass]) -> AccessClass:
+    """The highest class among those given; public when there are none."""
+    return max(classes, key=ACCESS_CLASS_RANK.__getitem__, default=AccessClass.PUBLIC)
 
 
 class ReviewerStatus(StrEnum):
