@@ -5,16 +5,11 @@ this module answers "how" for the metrics that have an unambiguous definition in
 of the domain models the pipeline already produces - a ``ResearchReport``, a
 ``CriticReview``, the evidence requirements a plan asked for.
 
-Two of section 14's items don't fit that mold and live elsewhere on purpose:
-
-- Cross-tenant access prevention is a structural property the capability registry and
-  gateway already enforce (``mcp/registry.py``'s tenant scoping,
-  ``mcp/gateway.py``'s re-check at execution time), proven by the tenant-isolation tests
-  already spread across ``tests/unit`` and ``tests/integration`` rather than a score this
-  module could compute from a finished job's output.
-- Recovery after a controlled failure is a property of a *running* Temporal workflow,
-  not of a job's finished output, and is proven by
-  ``tests/integration/test_workflow_recovery.py``.
+``research_platform.evaluation.suite`` runs the pipeline over labelled scenarios and
+feeds these functions what each job recorded. Cross-tenant access prevention is scored
+there too, by probing a real job from a second tenant. Recovery after a controlled
+failure is a property of a *running* Temporal workflow, not of a job's finished output,
+and is proven by ``tests/integration/test_workflow_recovery.py``.
 
 ``contradiction_recall`` and ``tool_selection_accuracy`` need a labelled scenario's
 ground truth as an input - a live job has no ground truth to compare itself against, so
@@ -108,3 +103,25 @@ def schema_validity_rate(*, attempts: int, exhausted: int) -> float:
     if exhausted > attempts:
         raise ValueError("exhausted attempts cannot exceed total attempts")
     return (attempts - exhausted) / attempts
+
+
+def task_completion_rate(*, completed: int, total: int) -> float:
+    """The fraction of jobs that reached ``completed`` rather than partial or failed."""
+    if total <= 0:
+        raise ValueError("task_completion_rate needs at least one job")
+    if not 0 <= completed <= total:
+        raise ValueError("completed jobs must be between zero and the total")
+    return completed / total
+
+
+def tool_call_validity_rate(*, calls: int, invalid: int) -> float:
+    """The fraction of tool calls whose arguments the tool's schema accepted.
+
+    Section 14's design target is at least 95%. A run that made no tool calls has made
+    no invalid ones, so it scores 1.0 rather than being undefined.
+    """
+    if calls < 0 or not 0 <= invalid <= max(calls, 0):
+        raise ValueError("invalid calls must be between zero and the number of calls")
+    if calls == 0:
+        return 1.0
+    return (calls - invalid) / calls
