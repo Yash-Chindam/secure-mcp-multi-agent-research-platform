@@ -31,7 +31,7 @@ from research_platform.agents.contracts import (
     ResearchPlan,
     ResearchReport,
 )
-from research_platform.agents.crew import KickoffAgent, request_agent_output
+from research_platform.agents.crew import KickoffAgent, request_agent_output_async
 from research_platform.agents.provenance import EvidenceClaims, EvidenceLedger, verify_claims
 from research_platform.agents.tools import (
     ApprovalProvider,
@@ -93,7 +93,7 @@ class ResearchActivities:
     pricing: TokenPricing = field(default_factory=TokenPricing)
     metrics: PlatformMetrics | None = None
 
-    def _ask(
+    async def _ask(
         self,
         job: ResearchJob,
         role: AgentRole,
@@ -117,7 +117,7 @@ class ResearchActivities:
         stats = AgentCallStats()
         started = time.monotonic()
         try:
-            return request_agent_output(
+            return await request_agent_output_async(
                 agent, role, instructions=instructions, verify=verify, stats=stats
             )
         finally:
@@ -147,7 +147,7 @@ class ResearchActivities:
             f"Capabilities available to the crew:\n{catalogue}\n\n"
             "Decompose this into a ResearchPlan."
         )
-        result = self._ask(job, AgentRole.PLANNER, agent, instructions)
+        result = await self._ask(job, AgentRole.PLANNER, agent, instructions)
         assert isinstance(result, ResearchPlan)
         return result
 
@@ -175,7 +175,7 @@ class ResearchActivities:
             "tool_invocation_id printed at the top of that tool result. Record any "
             "requirement you could not meet instead of guessing at it."
         )
-        claims = self._ask(
+        claims = await self._ask(
             job,
             AgentRole.RESEARCHER,
             agent,
@@ -206,7 +206,7 @@ class ResearchActivities:
             "Compare this evidence and produce an AnalysisResult. Every finding must cite "
             "the evidence identifiers above; do not invent one."
         )
-        result = self._ask(
+        result = await self._ask(
             job,
             AgentRole.ANALYST,
             agent,
@@ -240,7 +240,7 @@ class ResearchActivities:
             f"{_describe_evidence(evidence)}\n\n"
             "Judge each claim against the evidence and produce a CriticReview."
         )
-        result = self._ask(
+        result = await self._ask(
             job,
             AgentRole.CRITIC,
             agent,
@@ -274,7 +274,7 @@ class ResearchActivities:
             "identifiers above in square brackets. If the coverage gaps below mean the "
             f"report cannot be complete, mark it partial: {gaps}."
         )
-        result = self._ask(
+        result = await self._ask(
             job,
             AgentRole.REPORTER,
             agent,

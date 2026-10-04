@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Each agent step runs as a CrewAI Flow (request, judge, correct). This also fixes real CrewAI
+  agents returning an unawaited coroutine when called from a Temporal activity, which would have
+  failed every job run with a real model.
+- The pipeline is now tested with real CrewAI agents and a canned model, under Temporal.
 - Circuit-breaker state is shared through Redis, so a server one worker has seen fail is rested
   by every worker.
 
@@ -79,7 +83,5 @@ with the gaps listed under "Known limits" below.
   evaluation suite reports model quality only when run with one.
 - The Python sandbox backend needs a container runtime socket, which should not be mounted into a
   Kubernetes pod.
-- Agents are orchestrated by the Temporal workflow calling one CrewAI agent per step, not by a
-  CrewAI Flow.
 - The Docker Compose stack runs without token verification and connects to PostgreSQL as a role
   that bypasses row-level security. Both are logged as warnings at startup.
