@@ -11,6 +11,7 @@ under a Temporal activity.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -140,6 +141,21 @@ def build_agent(
     )
 
 
+def describe_contract(contract: type[BaseModel]) -> str:
+    """The response format an agent is held to, stated in the request itself.
+
+    Naming a contract is not enough: a model has never seen ``ResearchPlan`` and cannot
+    guess its fields. The schema is the same one the response is then judged against.
+    """
+    schema = json.dumps(contract.model_json_schema(), separators=(",", ":"))
+    return (
+        f"Respond with a single JSON object for a {contract.__name__}, and nothing else: "
+        "no prose and no code fence. Use exactly the field names in this JSON Schema, and "
+        "return an instance of it, not the schema itself.\n"
+        f"{schema}"
+    )
+
+
 def _contract_flow(
     agent: KickoffAgent,
     role: AgentRole,
@@ -153,7 +169,7 @@ def _contract_flow(
         agent=agent,
         role=role.value,
         contract=AGENT_SPECS[role].contract,
-        instructions=instructions,
+        instructions=f"{instructions}\n\n{describe_contract(AGENT_SPECS[role].contract)}",
         max_attempts=max_attempts,
         verify=verify,
         stats=stats,

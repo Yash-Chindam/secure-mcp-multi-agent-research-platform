@@ -303,8 +303,12 @@ calculation pods under gVisor or Kata for a stronger kernel boundary.
 
 ## Known limits
 
-- The evaluation suite has only been run with a scripted crew. Model quality scores need a run
-  with a real model and its API key.
+- The evaluation suite has been run against a real model only once, with a small local one
+  (`qwen2.5:3b` through Ollama, `RESEARCH_AGENT_LLM=ollama/qwen2.5:3b`). It produced valid
+  research plans and then failed to use its tools, so every job ended `partial` with no evidence
+  and no quality scores. Those need a run with a capable model and its API key.
+- The evaluation command exits zero when its four design targets are met. A run in which no job
+  completes still meets them, so read the task completion rate as well as the exit code.
 - The Kubernetes sandbox tests need a cluster, so continuous integration skips them. They were
   run against k3s; see `tests/integration/test_kubernetes_sandbox_cluster.py` for how to point
   them at a cluster.
