@@ -132,7 +132,8 @@ class ResearchJobWorkflow:
     """
 
     def __init__(self) -> None:
-        self._reviewer_decision: ReviewerDecision | None = None
+        self._reviewer_decisions: list[ReviewerDecision] = []
+        self._review_is_open = False
 
     @workflow.run
     async def run(self, job: ResearchJob) -> ResearchOutcome:
@@ -157,6 +158,8 @@ class ResearchJobWorkflow:
     async def transition(
         self, tenant_id: str, job_id: UUID, target: JobStatus, detail: str | None = None
     ) -> ResearchJob:
+        if target is JobStatus.REVIEW_REQUIRED:
+            self._review_is_open = True
         return await workflow.execute_activity(  # type: ignore[no-any-return]
             "transition_job",
             args=[tenant_id, job_id, target, detail],
@@ -260,12 +263,27 @@ class ResearchJobWorkflow:
         worker: a reviewer who takes a day to respond costs nothing but Temporal's own
         state storage for that day (section 12's "suspend durably without consuming an
         active worker").
+
+        The review opens when the job is sent to ``review_required`` (see
+        ``transition``), not when this starts waiting. The job is shown as awaiting
+        review as soon as that status is stored, which is before the workflow gets
+        here, and a worker that restarts in between replays the stored status and the
+        signal in one step. A decision made in that gap must still be acted on.
         """
-        self._reviewer_decision = None
-        await workflow.wait_condition(lambda: self._reviewer_decision is not None)
-        assert self._reviewer_decision is not None
-        return self._reviewer_decision
+        await workflow.wait_condition(lambda: bool(self._reviewer_decisions))
+        decision = self._reviewer_decisions[0]
+        # One decision answers one review. The review closes here, and anything else
+        # that arrived for it - a second click, a second reviewer - goes with it.
+        self._review_is_open = False
+        self._reviewer_decisions.clear()
+        return decision
 
     @workflow.signal(name="submit_reviewer_decision")
     def submit_reviewer_decision(self, decision: ReviewerDecision) -> None:
-        self._reviewer_decision = decision
+        """Record a reviewer's decision, if the job is at a review.
+
+        A decision that arrives when no review is open - a second click after the first
+        was acted on - is dropped, so it cannot answer a later round by itself.
+        """
+        if self._review_is_open:
+            self._reviewer_decisions.append(decision)

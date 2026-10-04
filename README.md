@@ -230,7 +230,21 @@ never both take a job's last tool call. Without it each process counts its own, 
 correct for a single worker. If Redis becomes unreachable the platform refuses the work it cannot
 account for instead of running it unmetered.
 
+### Evaluation
+
+```powershell
+python -m research_platform.evaluation          # scores and design targets
+python -m research_platform.evaluation --json   # the full report
+```
+
+The suite runs the real pipeline over labelled scenarios against a fixed corpus, using the model
+in `RESEARCH_AGENT_LLM`, and scores it on the section 14 criteria: task completion, tool selection,
+schema-valid tool calls, citation correctness, claim support, research coverage, contradiction
+recall, and cost and time per completed report. It also has a second tenant try every route to
+another tenant's job and counts how many get through. The command exits non-zero when a design
+target is missed. Recovery after a worker restart is proven separately, against a real Temporal
+test server, in `tests/integration/test_workflow_recovery.py`.
+
 ## Next milestones
 
-1. The remaining section 14 evaluations: cross-tenant prevention, task completion, cost and time.
-2. Review, report and audit views in the requester interface.
+1. Review, report and audit views in the requester interface.

@@ -64,14 +64,17 @@ class ScriptedAgent:
 class ScriptedResearcher(ScriptedAgent):
     """Fetches the pricing page with its tool, then quotes what the tool returned."""
 
-    def __init__(self, tools: list[BaseTool], *, excerpt: str = SOURCE_TEXT) -> None:
+    def __init__(
+        self, tools: list[BaseTool], *, excerpt: str = SOURCE_TEXT, url: str = SOURCE_URL
+    ) -> None:
         super().__init__(self._research)
         self.tools = tools
         self._excerpt = excerpt
+        self._url = url
 
     def _research(self, _message: str) -> str:
         fetch = next(tool for tool in self.tools if tool.name == "web_research_fetch")
-        returned = str(fetch.run(url=SOURCE_URL))
+        returned = str(fetch.run(url=self._url))
         match = INVOCATION_ID.search(returned)
         assert match is not None, f"the tool result named no invocation: {returned!r}"
         return json.dumps(
