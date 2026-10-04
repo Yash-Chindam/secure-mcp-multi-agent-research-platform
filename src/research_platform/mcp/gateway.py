@@ -24,6 +24,7 @@ from research_platform.domain.invocations import (
 from research_platform.domain.models import ResearchBudget, utc_now
 from research_platform.identity import Principal
 from research_platform.mcp.breaker import (
+    Breaker,
     BudgetExhausted,
     BudgetLedger,
     Budgets,
@@ -181,7 +182,7 @@ class CapabilityGateway:
         executor: CapabilityExecutor,
         policy: PolicyEngine | None = None,
         budgets: Budgets | None = None,
-        breaker: CircuitBreaker | None = None,
+        breaker: Breaker | None = None,
         tracer: Tracer | None = None,
         metrics: PlatformMetrics | None = None,
         audit: InvocationSink | None = None,
@@ -200,7 +201,7 @@ class CapabilityGateway:
         return self._budgets
 
     @property
-    def breaker(self) -> CircuitBreaker:
+    def breaker(self) -> Breaker:
         return self._breaker
 
     def invoke(
@@ -345,7 +346,7 @@ class CapabilityGateway:
 
         try:
             self._breaker.ensure_closed(capability.server)
-        except CircuitOpen as error:
+        except (CircuitOpen, LimitStoreUnavailable) as error:
             raise audit.denied(str(error), ErrorClass.UPSTREAM_UNAVAILABLE) from error
 
         return self._execute(audit, principal, arguments)

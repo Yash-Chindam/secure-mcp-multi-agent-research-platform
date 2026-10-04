@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Circuit-breaker state is shared through Redis, so a server one worker has seen fail is rested
+  by every worker.
+
 ## 0.9.0
 
 The first tagged release. It implements the design specification in
@@ -74,7 +79,6 @@ with the gaps listed under "Known limits" below.
   evaluation suite reports model quality only when run with one.
 - The Python sandbox backend needs a container runtime socket, which should not be mounted into a
   Kubernetes pod.
-- Circuit breaker state is per worker.
 - Agents are orchestrated by the Temporal workflow calling one CrewAI agent per step, not by a
   CrewAI Flow.
 - The Docker Compose stack runs without token verification and connects to PostgreSQL as a role
