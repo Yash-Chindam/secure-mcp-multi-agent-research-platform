@@ -8,7 +8,12 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from research_platform.agents.contracts import ResearchPlan
-from research_platform.agents.crew import AGENT_SPECS, build_agent, request_agent_output
+from research_platform.agents.crew import (
+    AGENT_SPECS,
+    build_agent,
+    describe_contract,
+    request_agent_output,
+)
 from research_platform.agents.provenance import EvidenceClaims
 from research_platform.agents.validation import SchemaCorrectionExhausted
 from research_platform.domain.tasks import AgentRole
@@ -79,7 +84,7 @@ def test_a_conforming_first_response_needs_no_correction() -> None:
     plan = request_agent_output(agent, AgentRole.PLANNER, instructions="Plan the research.")  # type: ignore[arg-type]
 
     assert isinstance(plan, ResearchPlan)
-    assert agent.messages == ["Plan the research."]
+    assert len(agent.messages) == 1
 
 
 def test_an_invalid_response_is_corrected_with_the_failure_named() -> None:
@@ -153,3 +158,26 @@ def test_a_flow_must_allow_at_least_one_attempt() -> None:
         request_agent_output(
             FakeAgent([VALID_PLAN]), AgentRole.PLANNER, instructions="Plan.", max_attempts=0
         )
+
+
+@pytest.mark.parametrize("role", list(AgentRole))
+def test_every_agent_is_shown_the_fields_of_the_contract_it_is_held_to(role: AgentRole) -> None:
+    """A model told only the contract's name cannot guess what to return."""
+    contract = AGENT_SPECS[role].contract
+
+    described = describe_contract(contract)
+
+    assert contract.__name__ in described
+    for field in contract.model_fields:
+        assert f'"{field}"' in described
+
+
+def test_the_contract_is_part_of_what_the_agent_is_asked() -> None:
+    agent = FakeAgent([VALID_PLAN])
+
+    request_agent_output(agent, AgentRole.PLANNER, instructions="Plan the research.")  # type: ignore[arg-type]
+
+    asked = agent.messages[0]
+    assert asked.startswith("Plan the research.")
+    assert '"evidence_requirements"' in asked
+    assert '"assigned_agent"' in asked

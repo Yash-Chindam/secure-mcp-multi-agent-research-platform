@@ -31,7 +31,7 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(
         title="Secure MCP Multi-Agent Research Platform",
-        version="0.9.0",
+        version="0.10.0",
     )
     resolved = settings or load_settings()
     service = ResearchJobService(build_job_repository(resolved))

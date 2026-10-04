@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
 - Each agent step runs as a CrewAI Flow (request, judge, correct). This also fixes real CrewAI
   agents returning an unawaited coroutine when called from a Temporal activity, which would have
@@ -27,6 +27,17 @@
   network for about a second before a NetworkPolicy reaches it.
 - A calculation now runs in a namespace of its own, so the sandbox entrypoint's imports are not
   within its reach.
+- Fixed: an agent was told the name of the contract it had to return but never shown its fields,
+  so a real model could not comply. The contract's JSON Schema is now part of every request.
+  Found by the first run against a real model.
+
+### Known limits
+
+- The evaluation suite has been run against a real model only once, with a small local one
+  (`qwen2.5:3b` through Ollama). It produced valid research plans, then failed to use tools, so
+  every job ended `partial` with no evidence. Quality scores need a capable model and its key.
+- The Kubernetes sandbox tests need a cluster and are skipped in continuous integration. They
+  pass against k3s.
 
 ## 0.9.0
 
