@@ -28,7 +28,16 @@ settings:
   workspaceRoots: ""          # tenant=/absolute/path,tenant2=/absolute/path
   analyticsTenantSchemas: ""  # tenant=schema,tenant2=schema
   githubRepositories: ""      # tenant=owner/repo|owner/other,tenant2=owner/repo
-  sandboxImage: ""            # e.g. python:3.12-alpine; needs a container runtime
+  sandboxImage: ""            # e.g. python:3.12-alpine; empty disables the sandbox
+  # Calculations run as Kubernetes Jobs in the release namespace, created by the
+  # platform's service account. The chart grants that account the Job permissions and
+  # adds a NetworkPolicy that denies calculation pods all traffic. A calculation pod
+  # runs nothing until it has confirmed it cannot reach the API server, so on a cluster
+  # whose network plugin does not enforce NetworkPolicy calculations fail instead of
+  # running with a network. "docker" is for a host with a container runtime and is not
+  # suitable in a cluster.
+  sandboxRuntime: kubernetes
+  sandboxRuntimeClass: ""     # e.g. gvisor, for a stronger kernel boundary
   # The OAuth client the worker authenticates to remote MCP servers as. Used with
   # oidcIssuer/oidcAudience, which the servers verify the token against.
   mcpClientId: ""

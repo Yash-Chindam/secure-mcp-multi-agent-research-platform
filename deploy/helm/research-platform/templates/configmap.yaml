@@ -18,6 +18,10 @@ data:
   RESEARCH_ANALYTICS_TENANT_SCHEMAS: {{ .Values.settings.analyticsTenantSchemas | quote }}
   RESEARCH_GITHUB_REPOSITORIES: {{ .Values.settings.githubRepositories | quote }}
   RESEARCH_SANDBOX_IMAGE: {{ .Values.settings.sandboxImage | quote }}
+  RESEARCH_SANDBOX_RUNTIME: {{ .Values.settings.sandboxRuntime | quote }}
+  {{- if .Values.settings.sandboxRuntimeClass }}
+  RESEARCH_SANDBOX_RUNTIME_CLASS: {{ .Values.settings.sandboxRuntimeClass | quote }}
+  {{- end }}
   RESEARCH_MCP_CLIENT_ID: {{ .Values.settings.mcpClientId | quote }}
   RESEARCH_ARTIFACT_ENDPOINT: {{ tpl .Values.settings.artifactEndpoint . | quote }}
   RESEARCH_ARTIFACT_BUCKET: {{ .Values.settings.artifactBucket | quote }}

@@ -19,6 +19,14 @@
   directory.
 - Fixed: a served MCP server had no `/health` route, so its container was always reported
   unhealthy.
+- The Python sandbox can run each calculation as a Kubernetes Job
+  (`RESEARCH_SANDBOX_RUNTIME=kubernetes`), with no container runtime socket. The chart adds the
+  service account permissions and a NetworkPolicy that denies calculation pods all traffic.
+- A calculation pod runs the submitted code only after confirming it has no network, and refuses
+  to run if the cluster does not isolate it. Testing against a real cluster showed a new pod has
+  network for about a second before a NetworkPolicy reaches it.
+- A calculation now runs in a namespace of its own, so the sandbox entrypoint's imports are not
+  within its reach.
 
 ## 0.9.0
 

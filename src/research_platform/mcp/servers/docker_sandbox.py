@@ -14,8 +14,7 @@ those, and none is optional:
 
 The code is passed on standard input, never interpolated into a command line. This
 backend needs a container runtime it can reach; in Kubernetes, where mounting a runtime
-socket into a pod is itself a privilege, back ``SandboxBackend`` with a Job or a
-sandboxed runtime class instead.
+socket into a pod is itself a privilege, use ``KubernetesSandboxBackend`` instead.
 """
 
 from __future__ import annotations
@@ -28,7 +27,10 @@ from uuid import uuid4
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
-ENTRYPOINT = "import sys; exec(compile(sys.stdin.read(), '<calculation>', 'exec'))"
+# The calculation gets a namespace of its own, so ``sys`` here is not within its reach.
+ENTRYPOINT = (
+    "import sys; exec(compile(sys.stdin.read(), '<calculation>', 'exec'), {'__name__': '__main__'})"
+)
 MAX_ERROR_CHARACTERS = 2_000
 
 
