@@ -7,6 +7,8 @@ rather than inferred from a silent fallback.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -77,6 +79,19 @@ class Settings(BaseSettings):
     sandbox_image: str | None = Field(
         default=None,
         description="Container image calculations run in; unset disables the sandbox.",
+    )
+    sandbox_runtime: Literal["docker", "kubernetes"] = Field(
+        default="docker",
+        description="What starts the calculation container: a local container runtime, "
+        "or the API server of the cluster the process runs in.",
+    )
+    sandbox_namespace: str | None = Field(
+        default=None,
+        description="Namespace calculation Jobs are created in; defaults to the pod's own.",
+    )
+    sandbox_runtime_class: str | None = Field(
+        default=None,
+        description="A sandboxed runtime class (gVisor, Kata) for calculation pods.",
     )
     mcp_server_urls: str = Field(
         default="",

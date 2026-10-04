@@ -36,6 +36,7 @@ from research_platform.mcp.servers.filesystem_boundary import WorkspaceRoots
 from research_platform.mcp.servers.github_api import GitHubApiBackend, github_client
 from research_platform.mcp.servers.github_boundary import RepositoryAllowlist
 from research_platform.mcp.servers.http_web import HttpWebBackend
+from research_platform.mcp.servers.kubernetes_sandbox import in_cluster_sandbox
 from research_platform.mcp.servers.postgres_backend import PostgresSqlBackend
 from research_platform.mcp.servers.sandbox_boundary import SandboxLimits
 from research_platform.mcp.servers.web_boundary import (
@@ -118,6 +119,13 @@ def _github(settings: Settings) -> GitHubBackend | None:
 def _sandbox(settings: Settings, limits: SandboxLimits) -> SandboxBackend | None:
     if not settings.sandbox_image:
         return None
+    if settings.sandbox_runtime == "kubernetes":
+        return in_cluster_sandbox(
+            image=settings.sandbox_image,
+            wall_clock_seconds=limits.wall_clock_seconds,
+            namespace=settings.sandbox_namespace,
+            runtime_class=settings.sandbox_runtime_class,
+        )
     return DockerSandboxBackend(
         image=settings.sandbox_image, wall_clock_seconds=limits.wall_clock_seconds
     )

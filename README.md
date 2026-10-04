@@ -282,9 +282,29 @@ another tenant's job and counts how many get through. The command exits non-zero
 target is missed. Recovery after a worker restart is proven separately, against a real Temporal
 test server, in `tests/integration/test_workflow_recovery.py`.
 
+## The Python sandbox
+
+A calculation runs in a fresh container with no network, a read-only filesystem, an unprivileged
+user and CPU, memory and time limits. `RESEARCH_SANDBOX_RUNTIME` chooses what starts it:
+
+- `docker` (the default) uses a local container runtime. Use it on a single host.
+- `kubernetes` creates a Job through the API server, as the pod's own service account. Nothing
+  mounts a container runtime socket. The Helm chart uses this, grants the account only what it
+  needs (create, read and delete Jobs; read pod logs) and adds a NetworkPolicy that denies
+  calculation pods all traffic.
+
+A network plugin applies a policy to a new pod about a second after it starts, and some plugins
+do not enforce policies at all. So the pod checks for itself: it runs the submitted code only
+after it has confirmed it cannot reach the API server. If it still can after
+15 seconds, it exits without running anything and the calculation fails with that reason.
+
+Set `RESEARCH_SANDBOX_RUNTIME_CLASS` (chart value `settings.sandboxRuntimeClass`) to run
+calculation pods under gVisor or Kata for a stronger kernel boundary.
+
 ## Known limits
 
 - The evaluation suite has only been run with a scripted crew. Model quality scores need a run
   with a real model and its API key.
-- The Python sandbox backend starts containers through a container runtime socket, which should
-  not be mounted into a Kubernetes pod. Back it with a Job or a sandboxed runtime class there.
+- The Kubernetes sandbox tests need a cluster, so continuous integration skips them. They were
+  run against k3s; see `tests/integration/test_kubernetes_sandbox_cluster.py` for how to point
+  them at a cluster.

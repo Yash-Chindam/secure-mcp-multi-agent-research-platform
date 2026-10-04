@@ -1,0 +1,52 @@
+{{/*
+The Python analysis sandbox (section 8) in a cluster. Each calculation is a Job the
+platform's service account creates; nothing mounts a container runtime socket. The Role
+is the whole of what that account may do with the API server, and the NetworkPolicy is
+what disables the network for a calculation pod: it selects the label the backend puts
+on every calculation and allows nothing in either direction, DNS included.
+*/}}
+{{- if and .Values.settings.sandboxImage (eq .Values.settings.sandboxRuntime "kubernetes") }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "research-platform.fullname" . }}-sandbox
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "research-platform.fullname" . }}-sandbox
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "research-platform.fullname" . }}-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "research-platform.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "research-platform.fullname" . }}-sandbox-isolated
+  labels:
+    {{- include "research-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      research-platform/sandbox: calculation
+  policyTypes: [Ingress, Egress]
+{{- end }}
